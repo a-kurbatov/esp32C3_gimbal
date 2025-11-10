@@ -406,6 +406,7 @@ static void sensorhubControlHdlr(void *cookie, uint8_t *payload, uint16_t len, u
     uint32_t count = 0;
     CommandResp_t * pResp = 0;
     static int s_ctrl_log_count = 0;
+#if CONFIG_GIMBAL_BNO08X_SPI_TRACE
     if (payload && len && s_ctrl_log_count < 50) {
         int dump = (len > 64) ? 64 : len;
         char hex[3*64 + 1];
@@ -416,6 +417,7 @@ static void sensorhubControlHdlr(void *cookie, uint8_t *payload, uint16_t len, u
         ESP_LOGI("sh2_ctrl", "CTRL PAY (%u): %s%s", (unsigned)len, hex, (len>dump?"...":""));
         s_ctrl_log_count++;
     }
+#endif
     
     if (len == 0) {
         pSh2->emptyPayloads++;

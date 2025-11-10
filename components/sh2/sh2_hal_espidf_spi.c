@@ -100,6 +100,7 @@ static int hal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t
         if (!asserted && !bypass) {
             if (s_last_int != level) {
                 s_last_int = level;
+#if CONFIG_GIMBAL_BNO08X_SPI_TRACE
                 if (s_int_log_count < 10) {
                     ESP_LOGI(TAG, "INT level=%d (polarity %s)", level,
 #if CONFIG_GIMBAL_BNO08X_INT_ACTIVE_LOW
@@ -110,15 +111,18 @@ static int hal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t
                     );
                     s_int_log_count++;
                 }
+#endif
             }
             return 0;
         }
         if (s_last_int != level) {
             s_last_int = level;
+#if CONFIG_GIMBAL_BNO08X_SPI_TRACE
             if (s_int_log_count < 10) {
                 ESP_LOGI(TAG, "INT asserted (level=%d)", level);
                 s_int_log_count++;
             }
+#endif
         }
     }
    
@@ -153,10 +157,12 @@ static int hal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t
     uint16_t lenField = (uint16_t)pBuffer[0] | ((uint16_t)pBuffer[1] << 8);
     bool continuation = (lenField & 0x8000) != 0;
     uint16_t pkt_len = lenField & 0x7FFF; // mask off continuation bit per SHTP
+    #if CONFIG_GIMBAL_BNO08X_SPI_TRACE
     if (s_rx_count < 10) {
         ESP_LOGI(TAG, "SHTP hdr lenField=0x%04X len=%u cont=%d ch=%u seq=%u raw=%02X %02X %02X %02X",
                  (unsigned)lenField, (unsigned)pkt_len, (int)continuation, pBuffer[2], pBuffer[3], pBuffer[0], pBuffer[1], pBuffer[2], pBuffer[3]);
     }
+    #endif
     // If header indicates no data or invalid, bail out
     if (pkt_len == 0 || pkt_len == 0xFFFF) { spi_device_release_bus(s_dev); return 0; }
     if (pkt_len < 4 || pkt_len > len) { spi_device_release_bus(s_dev); return 0; }
@@ -264,9 +270,11 @@ static int hal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len) {
         ESP_LOGE(TAG, "spi tx err=%d", e);
         return 0;
     }
+    #if CONFIG_GIMBAL_BNO08X_SPI_TRACE
     if (s_tx_count < 5) {
         ESP_LOGI(TAG, "SHTP tx len=%u", (unsigned)len);
     }
+    #endif
     s_tx_count++;
     return (int)len;
 }

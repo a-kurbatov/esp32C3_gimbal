@@ -259,19 +259,22 @@ static void bno08x_spi_task(void *arg)
             sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000);
             #endif
             // Request GET_FEATURE for verification (bounded by timeouts in sh2.c)
+            #if CONFIG_GIMBAL_BNO08X_SPI_TRACE
             sh2_SensorConfig_t rcfg;
             if (sh2_getSensorConfig(SH2_GAME_ROTATION_VECTOR, &rcfg) == SH2_OK) {
                 ESP_LOGI(TAG, "getFeature GRV: AO=%d WK=%d int=%lu us",
                          (int)rcfg.alwaysOnEnabled, (int)rcfg.wakeupEnabled, (unsigned long)rcfg.reportInterval_us);
             }
+            #endif
             // Do not bypass INT; read only when INT asserts to avoid zero packets
             s_sensors_enabled = true;
             s_enable_us = (uint32_t)esp_timer_get_time();
         }
         uint32_t now_us = (uint32_t)esp_timer_get_time();
-        // Health log every ~1s
+        // Health log every ~1s (debug only)
         static uint32_t last_log_us = 0;
         uint32_t now = now_us;
+        #if CONFIG_GIMBAL_BNO08X_SPI_TRACE
         if (now - last_log_us > 1000000) {
             int int_lvl = -1;
             if (CONFIG_GIMBAL_BNO08X_INT_GPIO >= 0) int_lvl = gpio_get_level(CONFIG_GIMBAL_BNO08X_INT_GPIO);
@@ -285,6 +288,7 @@ static void bno08x_spi_task(void *arg)
                      (unsigned long)c_acc.on, (unsigned long)c_gyro.on, rc_a, rc_g);
             last_log_us = now;
         }
+        #endif
         // Always yield a little to avoid WDT even if INT storms
         vTaskDelay(pdMS_TO_TICKS(1));
     // Avoid starving IDLE/other tasks (handled in the branch delays above)
