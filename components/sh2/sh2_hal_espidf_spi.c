@@ -22,6 +22,25 @@ static uint8_t s_dummy[SH2_HAL_DMA_SIZE];
 static uint32_t s_trace_count = 0;
 static volatile uint32_t s_bypass_int_until_us = 0;
 
+// Briefly assert WAKE to ensure the device is awake before command writes
+// Pulse WAKE pin low to wake the BNO08x from sleep
+static void hal_wake(void) {
+    if (s_wake_gpio < 0) return;
+
+    // Pulse WAKE (PS0) low to wake device
+    gpio_set_level(s_wake_gpio, 0);
+
+    // Wait 500us (datasheet twk is ~150us)
+    esp_rom_delay_us(500);
+
+    // Return WAKE high (idle state)
+    gpio_set_level(s_wake_gpio, 1);
+
+    // Give the device time to assert H_INTN.
+    // The hal_read() function will see this assertion.
+    vTaskDelay(pdMS_TO_TICKS(1));
+}
+
 static int hal_open(sh2_Hal_t *self) {
     (void)self;
     // Configure optional WAKE/RESET and perform reset cycle
@@ -34,12 +53,12 @@ static int hal_open(sh2_Hal_t *self) {
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io);
-        // Pulse WAKE low to guarantee a clean wake edge, then drive HIGH
-        gpio_set_level(s_wake_gpio, 0);
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // Set WAKE (PS0) high and leave it high, as required by datasheet
+        // for SPI mode selection during reset.
         gpio_set_level(s_wake_gpio, 1);
         vTaskDelay(pdMS_TO_TICKS(5));
     }
+
     if (s_rst_gpio >= 0) {
         gpio_config_t io = {
             .pin_bit_mask = 1ULL << s_rst_gpio,
@@ -207,6 +226,10 @@ static int hal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t
 }
 static int hal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len) {
     (void)self;
+
+    // Wake the device before every command write
+    hal_wake();
+
     if (!s_dev || len < 4) return 0;
     // Acquire bus to serialize with any pending read sequence
     esp_err_t e = spi_device_acquire_bus(s_dev, portMAX_DELAY);

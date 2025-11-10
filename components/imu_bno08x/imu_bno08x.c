@@ -179,7 +179,7 @@ static void bno08x_spi_task(void *arg)
     int rc = sh2_open(hal, event_cb, NULL);
     ESP_LOGI(TAG, "sh2_open rc=%d", rc);
     // Issue a device reset to ensure adverts and a clean start
-    (void)sh2_devReset();
+    //(void)sh2_devReset();
     // Open a short bypass window and service to drain initial adverts
     #if CONFIG_GIMBAL_BNO08X_USE_SPI
     sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 500000); // 500 ms
@@ -226,8 +226,8 @@ static void bno08x_spi_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(50));
 
             // Re-initialize (some firmwares require host init after reset)
-            int rc_init = sh2_reinitialize();
-            ESP_LOGI(TAG, "sh2_reinitialize rc=%d", rc_init);
+            //int rc_init = sh2_reinitialize();
+            //ESP_LOGI(TAG, "sh2_reinitialize rc=%d", rc_init);
             // Briefly allow polling even without INT to catch short replies
             #if CONFIG_GIMBAL_BNO08X_USE_SPI
             sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000); // 1 s
@@ -237,13 +237,21 @@ static void bno08x_spi_task(void *arg)
             // Briefly service to drain any responses
             for (int i = 0; i < 10; ++i) { sh2_service(); vTaskDelay(pdMS_TO_TICKS(1)); }
 
-            // Start with one report only: Game Rotation Vector at 50 Hz
-            sh2_SensorConfig_t cfg_grv = {0};
-            cfg_grv.reportInterval_us = 20000; // 50 Hz
-            cfg_grv.alwaysOnEnabled = true;
-            cfg_grv.wakeupEnabled = false;
-            int r3 = sh2_setSensorConfig(SH2_GAME_ROTATION_VECTOR, &cfg_grv);
-            ESP_LOGI(TAG, "setSensorConfig grv rc=%d", r3);
+            // Configure sensors: Game Rotation Vector, Accelerometer, and Gyroscope at 50 Hz
+            sh2_SensorConfig_t cfg = {0};
+            cfg.reportInterval_us = 20000; // 50 Hz
+            cfg.alwaysOnEnabled = true;
+            cfg.wakeupEnabled = false;
+
+            int r_grv = sh2_setSensorConfig(SH2_GAME_ROTATION_VECTOR, &cfg);
+            ESP_LOGI(TAG, "setSensorConfig grv rc=%d", r_grv);
+
+            int r_acc = sh2_setSensorConfig(SH2_ACCELEROMETER, &cfg);
+            ESP_LOGI(TAG, "setSensorConfig accel rc=%d", r_acc);
+
+            int r_gyr = sh2_setSensorConfig(SH2_GYROSCOPE_CALIBRATED, &cfg);
+            ESP_LOGI(TAG, "setSensorConfig gyro rc=%d", r_gyr);
+
             // After feature enables, open a longer INT bypass window to avoid missing first responses
             #if CONFIG_GIMBAL_BNO08X_USE_SPI
             sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000); // 1 s

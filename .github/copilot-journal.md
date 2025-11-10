@@ -327,6 +327,14 @@ Rationale:
 Next actions:
 * Power-cycle with PS0=LOW, PS1=LOW (SPI straps). Connect WAKE (PS0) to GPIO3. Rebuild/flash. Expect: SH2 RESET → setFeature rc=0 → sensor events; health shows acc_on/gyro_on > 0.
 
+| 2025-11-10 | `imu_bno08x.c` | **Hypothesis:** The `sh2_reinitialize()` command is the problem. | Commented out the call to `sh2_reinitialize()` to see if subsequent commands (like `setSensorConfig`) would succeed. | `idf_py_stdout_output_26148` | **Failed.** `setSensorConfig` logs `rc=0` (as it doesn't wait for a reply), but the debug log `dbg: ... rc_a=-6 rc_g=-6` proves all commands are still timing out. |
+| 2025-11-10 | `BNO080_085-Datasheet.pdf` | **Datasheet Analysis:** Found critical new information. | The datasheet explicitly states on Page 46 that the BNO08x **requires SPI Mode 3 (CPOL=1, CPHA=1)**. | N/A | Our test of Mode 0 was incorrect. We must use Mode 3. We have not yet tested the *correct* combination of Mode 3 *and* no software resets. |
+| 2025-11-10 | `sdkconfig.defaults` | **Action:** Revert to correct SPI Mode 3. | Changed `CONFIG_GIMBAL_BNO08X_SPI_MODE` back to `3` in `sdkconfig.defaults` to match the datasheet. Kept software resets disabled. | `idf_py_stdout_output_20104` | **Failed.** The failure is identical (`rc_a=-6`). This proves the issue is not *just* the SPI mode or *just* the software resets. |
+| 2025-11-10 | `BNO080_085-Datasheet.pdf` | **Hypothesis:** The sensor is going to sleep. | Datasheet (Page 19) requires an **active-low WAKE pulse** before *every* command to wake the sensor. Our code only does this once at boot. | N/A | The sensor is likely sleeping after its initial advertisement, causing all subsequent commands to fail. |
+| 2025-11-10 | `sh2_hal_espidf_spi.c` | **Action:** Implement WAKE-on-write protocol. | Added a `hal_wake()` function to pulse the WAKE pin **low** for 500us. Modified `hal_write()` to call `hal_wake()` before every SPI write. | `idf_py_stdout_output_14664` | **Failed.** The `dbg:` log still shows `rc_a=-6 rc_g=-6`. The failure mode is unchanged, even with the correct WAKE pulse. |
+| 2025-11-10 | `BNO080_085-Datasheet.pdf` | **Hypothesis:** Hardware reset sequence is invalid. | Datasheet (Page 18, Note 5) requires the WAKE (PS0) pin to be **held high** *during* the hardware reset to select SPI mode. Our `hal_open` function was pulsing it low. | N/A | This protocol violation could be putting the sensor in an invalid state. |
+| 2025-11-10 | `sh2_hal_espidf_spi.c` | **Action:** Fix hardware reset sequence. | Simplified the `hal_open` function to *only* set the WAKE pin high, then pulse the RESET pin low, exactly as the datasheet requires. | `idf_py_stdout_output_25988` | **Failed.** The log is identical to the previous one. The `dbg:` log still shows `rc_a=-6 rc_g=-6`. |
+
 Context:
 * Simplified BNO08x activation assuming IMU is ready after HAL reset.
 * Removed task-start `sh2_devReset()` and host `sh2_reinitialize()` gating.
@@ -342,3 +350,20 @@ Next actions:
 * Enable optional SPI RX trace in HAL to dump first payload bytes of control responses and any sensor traffic.
 * Add a short delay (50–100 ms) between `SH2_RESET` and `setSensorConfig`, and log a single `sh2_getSensorConfig()` readback to verify the feature is active.
 * For diagnosis, temporarily bypass INT gating (poll header every 10–20 ms) to rule out missed INT edges on this board.
+
+Date: 2025-11-10
+Context:
+* Hardware fix confirmed: Removed the PS0 (WAKE) strap/jumper on the BNO08x breakout so WAKE/PS0 is no longer forced by the board. WAKE is now driven only by ESP32‑C3 GPIO3.
+* Result: SH-2 init completes and IMU events stream normally; `gimbal_main` shows non-zero accel/gyro and stable updates. Periodic health log no longer reports timeouts (no `rc_a=-6 rc_g=-6`).
+Decisions:
+* Keep SPI Mode 3 and current pin mapping: SCLK=GPIO4, MOSI=GPIO6, MISO=GPIO5, CS=GPIO7; INT (active‑low)=GPIO9; RST=GPIO2; WAKE=GPIO3.
+* Retain WAKE-on-write in the SPI HAL (pulse WAKE low ~500 µs before each command) to adhere to the wake protocol and for robustness.
+Changes made:
+* No code changes for this fix; hardware-only change (removed PS0 jumper). Verified `setSensorConfig` for ACCEL and GYRO succeeds and `sensor_cb` receives events.
+Evidence:
+* Monitor: "SH2 reset complete", "setSensorConfig accel rc=0", "gyro rc=0", followed by ACC/GYR event logs and valid IMU values in main output.
+Open questions / risks:
+* If straps are altered again, ensure WAKE (PS0) is held HIGH during reset for SPI selection, and only pulsed LOW for wake when sending commands.
+* WAKE-on-write can remain; remove only if later proven unnecessary.
+Next actions:
+* Clean up debug logs, tune loop gains, and document final wiring/strap requirements in README.
