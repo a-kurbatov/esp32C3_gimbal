@@ -367,3 +367,21 @@ Open questions / risks:
 * WAKE-on-write can remain; remove only if later proven unnecessary.
 Next actions:
 * Clean up debug logs, tune loop gains, and document final wiring/strap requirements in README.
+
+Date: 2025-11-10
+Context:
+* With IMU streaming, the control felt too soft; servo response to large tilt changes was sluggish.
+Decisions:
+* Increase control loop rate and gains for stronger, faster response while keeping integral at 0 initially to avoid windup.
+Changes made:
+* sdkconfig.defaults:
+	- CONFIG_GIMBAL_LOOP_HZ: 50 → 100
+	- CONFIG_GIMBAL_ALPHA: 980 → 950 (more accel blend for quicker visible response)
+	- CONFIG_GIMBAL_PID_KP: 1800 → 6000
+	- CONFIG_GIMBAL_PID_KI: 0 → 0 (unchanged; keep off for now)
+	- CONFIG_GIMBAL_PID_KD: 50 → 100
+Risks/notes:
+* Higher Kp may saturate the servo near large errors (clamped to ±105°). If oscillations appear, lower Kp to ~4000 or raise KD.
+* If steady-state error remains, introduce a small Ki (e.g., 50–100 → 0.05–0.10) and add anti-windup later if needed.
+Next actions:
+* Rebuild/flash and evaluate step response (tilt by hand). Adjust Kp/Kd in small increments; consider enabling a small Ki once stable.

@@ -39,9 +39,11 @@ static void sensor_cb(void *cookie, sh2_SensorEvent_t *pEvent) {
                 s_last_evt_us = (uint32_t)esp_timer_get_time();
                 break;
             case SH2_GYROSCOPE_CALIBRATED:
-                s_latest.gx = v.un.gyroscope.x;
-                s_latest.gy = v.un.gyroscope.y;
-                s_latest.gz = v.un.gyroscope.z;
+                // SH-2 reports gyro in rad/s; convert to deg/s to match imu_sample_t contract
+                const float RAD2DEG = 57.2957795f;
+                s_latest.gx = v.un.gyroscope.x * RAD2DEG;
+                s_latest.gy = v.un.gyroscope.y * RAD2DEG;
+                s_latest.gz = v.un.gyroscope.z * RAD2DEG;
                 if (first) { ESP_LOGI(TAG, "GYR evt: gx=%.2f gy=%.2f gz=%.2f", s_latest.gx, s_latest.gy, s_latest.gz); first = false; }
                 s_last_evt_us = (uint32_t)esp_timer_get_time();
                 break;
@@ -181,11 +183,11 @@ static void bno08x_spi_task(void *arg)
     // Issue a device reset to ensure adverts and a clean start
     //(void)sh2_devReset();
     // Open a short bypass window and service to drain initial adverts
-    #if CONFIG_GIMBAL_BNO08X_USE_SPI
-    sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 500000); // 500 ms
-    #elif CONFIG_GIMBAL_BNO08X_USE_I2C
-    sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 500000);
-    #endif
+    //#if CONFIG_GIMBAL_BNO08X_USE_SPI
+    //sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 500000); // 500 ms
+    //#elif CONFIG_GIMBAL_BNO08X_USE_I2C
+    //sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 500000);
+    //#endif
     for (int i = 0; i < 100; ++i) { sh2_service(); vTaskDelay(pdMS_TO_TICKS(5)); }
     // Try to fetch product IDs to confirm link (may fail until adverts processed)
     //sh2_ProductIds_t ids = {0};
@@ -229,17 +231,17 @@ static void bno08x_spi_task(void *arg)
             //int rc_init = sh2_reinitialize();
             //ESP_LOGI(TAG, "sh2_reinitialize rc=%d", rc_init);
             // Briefly allow polling even without INT to catch short replies
-            #if CONFIG_GIMBAL_BNO08X_USE_SPI
-            sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000); // 1 s
-            #elif CONFIG_GIMBAL_BNO08X_USE_I2C
-            sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000);
-            #endif
+            //#if CONFIG_GIMBAL_BNO08X_USE_SPI
+            //sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000); // 1 s
+            //#elif CONFIG_GIMBAL_BNO08X_USE_I2C
+            //sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000);
+            //#endif
             // Briefly service to drain any responses
             for (int i = 0; i < 10; ++i) { sh2_service(); vTaskDelay(pdMS_TO_TICKS(1)); }
 
-            // Configure sensors: Game Rotation Vector, Accelerometer, and Gyroscope at 50 Hz
+            // Configure sensors: Game Rotation Vector, Accelerometer, and Gyroscope at 200 Hz
             sh2_SensorConfig_t cfg = {0};
-            cfg.reportInterval_us = 20000; // 50 Hz
+            cfg.reportInterval_us = 5000; // 200 Hz
             cfg.alwaysOnEnabled = true;
             cfg.wakeupEnabled = false;
 
@@ -253,42 +255,38 @@ static void bno08x_spi_task(void *arg)
             ESP_LOGI(TAG, "setSensorConfig gyro rc=%d", r_gyr);
 
             // After feature enables, open a longer INT bypass window to avoid missing first responses
-            #if CONFIG_GIMBAL_BNO08X_USE_SPI
-            sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000); // 1 s
-            #elif CONFIG_GIMBAL_BNO08X_USE_I2C
-            sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000);
-            #endif
+            //if CONFIG_GIMBAL_BNO08X_USE_SPI
+            //sh2_hal_spi_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000); // 1 s
+            //#elif CONFIG_GIMBAL_BNO08X_USE_I2C
+            //sh2_hal_i2c_bypass_int_until(((uint32_t)esp_timer_get_time()) + 1000000);
+            //#endif
             // Request GET_FEATURE for verification (bounded by timeouts in sh2.c)
-            #if CONFIG_GIMBAL_BNO08X_SPI_TRACE
             sh2_SensorConfig_t rcfg;
             if (sh2_getSensorConfig(SH2_GAME_ROTATION_VECTOR, &rcfg) == SH2_OK) {
                 ESP_LOGI(TAG, "getFeature GRV: AO=%d WK=%d int=%lu us",
                          (int)rcfg.alwaysOnEnabled, (int)rcfg.wakeupEnabled, (unsigned long)rcfg.reportInterval_us);
             }
-            #endif
             // Do not bypass INT; read only when INT asserts to avoid zero packets
             s_sensors_enabled = true;
             s_enable_us = (uint32_t)esp_timer_get_time();
         }
         uint32_t now_us = (uint32_t)esp_timer_get_time();
-        // Health log every ~1s (debug only)
-        static uint32_t last_log_us = 0;
-        uint32_t now = now_us;
-        #if CONFIG_GIMBAL_BNO08X_SPI_TRACE
-        if (now - last_log_us > 1000000) {
-            int int_lvl = -1;
-            if (CONFIG_GIMBAL_BNO08X_INT_GPIO >= 0) int_lvl = gpio_get_level(CONFIG_GIMBAL_BNO08X_INT_GPIO);
-            uint32_t age_ms = s_last_evt_us ? (now - s_last_evt_us) / 1000 : 0xFFFFFFFF;
-            // Query counts (best-effort) to check feature on/off state
-            sh2_Counts_t c_acc = {0}, c_gyro = {0};
-            int rc_a = sh2_getCounts(SH2_ACCELEROMETER, &c_acc);
-            int rc_g = sh2_getCounts(SH2_GYROSCOPE_CALIBRATED, &c_gyro);
-            ESP_LOGI(TAG, "dbg: int=%d ready=%d enabled=%d last_evt_ms=%u acc_on=%lu gyro_on=%lu rc_a=%d rc_g=%d",
-                     int_lvl, (int)s_sh2_ready, (int)s_sensors_enabled, (unsigned)age_ms,
-                     (unsigned long)c_acc.on, (unsigned long)c_gyro.on, rc_a, rc_g);
-            last_log_us = now;
-        }
-        #endif
+        // Health log every ~1s
+        // static uint32_t last_log_us = 0;
+        // uint32_t now = now_us;
+        // if (now - last_log_us > 1000000) {
+        //     int int_lvl = -1;
+        //     if (CONFIG_GIMBAL_BNO08X_INT_GPIO >= 0) int_lvl = gpio_get_level(CONFIG_GIMBAL_BNO08X_INT_GPIO);
+        //     uint32_t age_ms = s_last_evt_us ? (now - s_last_evt_us) / 1000 : 0xFFFFFFFF;
+        //     // Query counts (best-effort) to check feature on/off state
+        //     sh2_Counts_t c_acc = {0}, c_gyro = {0};
+        //     int rc_a = sh2_getCounts(SH2_ACCELEROMETER, &c_acc);
+        //     int rc_g = sh2_getCounts(SH2_GYROSCOPE_CALIBRATED, &c_gyro);
+        //     ESP_LOGI(TAG, "dbg: int=%d ready=%d enabled=%d last_evt_ms=%u acc_on=%lu gyro_on=%lu rc_a=%d rc_g=%d",
+        //              int_lvl, (int)s_sh2_ready, (int)s_sensors_enabled, (unsigned)age_ms,
+        //              (unsigned long)c_acc.on, (unsigned long)c_gyro.on, rc_a, rc_g);
+        //     last_log_us = now;
+        // }
         // Always yield a little to avoid WDT even if INT storms
         vTaskDelay(pdMS_TO_TICKS(1));
     // Avoid starving IDLE/other tasks (handled in the branch delays above)
