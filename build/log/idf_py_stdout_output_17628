@@ -1,0 +1,113 @@
+Command: C:\Espressif\python_env\idf5.5_py3.13_env\Scripts\python.exe C:\Espressif\frameworks\esp-idf-v5.5.1\tools/idf_monitor.py -p COM30 -b 115200 --toolchain-prefix riscv32-esp-elf- --target esp32c3 --revision 3 --decode-panic backtrace C:\Work\!Dec1\ESP32\Gimbal\build\gimbal_esp32c3.elf C:\Work\!Dec1\ESP32\Gimbal\build\bootloader\bootloader.elf --force-color -m 'C:\Espressif\python_env\idf5.5_py3.13_env\Scripts\python.exe' 'C:\Espressif\frameworks\esp-idf-v5.5.1\tools\idf.py'
+ESP-ROM:esp32c3-api1-20210207
+Build:Feb  7 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0xf (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420054b8
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fcd5820,len:0x15ac
+load:0x403cbf10,len:0xc34
+load:0x403ce710,len:0x2fd0
+entry 0x403cbf1a
+[0;32mI (24) boot: ESP-IDF v5.5.1 2nd stage bootloader[0m
+[0;32mI (24) boot: compile time Nov  9 2025 13:29:46[0m
+[0;32mI (25) boot: chip revision: v0.4[0m
+[0;32mI (25) boot: efuse block revision: v1.3[0m
+[0;32mI (28) boot.esp32c3: SPI Speed      : 80MHz[0m
+[0;32mI (32) boot.esp32c3: SPI Mode       : DIO[0m
+[0;32mI (36) boot.esp32c3: SPI Flash Size : 2MB[0m
+[0;32mI (39) boot: Enabling RNG early entropy source...[0m
+[0;32mI (44) boot: Partition Table:[0m
+[0;32mI (46) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (53) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (59) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (66) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (72) boot: End of partition table[0m
+[0;32mI (76) esp_image: segment 0: paddr=00010020 vaddr=3c030020 size=0c19ch ( 49564) map[0m
+[0;32mI (91) esp_image: segment 1: paddr=0001c1c4 vaddr=3fc8ec00 size=015c4h (  5572) load[0m
+[0;32mI (92) esp_image: segment 2: paddr=0001d790 vaddr=40380000 size=02888h ( 10376) load[0m
+[0;32mI (100) esp_image: segment 3: paddr=00020020 vaddr=42000020 size=26bc4h (158660) map[0m
+[0;32mI (131) esp_image: segment 4: paddr=00046bec vaddr=40382888 size=0c33ch ( 49980) load[0m
+[0;32mI (140) esp_image: segment 5: paddr=00052f30 vaddr=50000000 size=00020h (    32) load[0m
+[0;32mI (145) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (145) boot: Disabling RNG early entropy source...[0m
+[0;32mI (158) cpu_start: Unicore app[0m
+[0;32mI (166) cpu_start: Pro cpu start user code[0m
+[0;32mI (166) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (166) app_init: Application information:[0m
+[0;32mI (166) app_init: Project name:     gimbal_esp32c3[0m
+[0;32mI (171) app_init: App version:      1[0m
+[0;32mI (174) app_init: Compile time:     Nov  9 2025 13:54:29[0m
+[0;32mI (179) app_init: ELF file SHA256:  f7cc5e885...[0m
+[0;32mI (183) app_init: ESP-IDF:          v5.5.1[0m
+[0;32mI (187) efuse_init: Min chip rev:     v0.3[0m
+[0;32mI (191) efuse_init: Max chip rev:     v1.99 [0m
+[0;32mI (195) efuse_init: Chip rev:         v0.4[0m
+[0;32mI (199) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (205) heap_init: At 3FC91E10 len 0002E1F0 (184 KiB): RAM[0m
+[0;32mI (210) heap_init: At 3FCC0000 len 0001C710 (113 KiB): Retention RAM[0m
+[0;32mI (216) heap_init: At 3FCDC710 len 00002950 (10 KiB): Retention RAM[0m
+[0;32mI (222) heap_init: At 50000020 len 00001FC8 (7 KiB): RTCRAM[0m
+[0;32mI (229) spi_flash: detected chip: generic[0m
+[0;32mI (231) spi_flash: flash io: dio[0m
+[0;33mW (234) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (247) sleep_gpio: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (253) sleep_gpio: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (260) main_task: Started on CPU0[0m
+[0;32mI (260) main_task: Calling app_main()[0m
+[0;32mI (270) bno08x: BNO08x INT mapped to GPIO 9[0m
+[0;32mI (270) bno08x: BNO08x SPI stub initialized: SCLK=4 MOSI=6 MISO=5 CS=7[0m
+[0;32mI (290) sh2_hal_spi: INT level=1 (polarity active-low)[0m
+[0;32mI (370) sh2_hal_spi: INT asserted (level=0)[0m
+[0;32mI (370) sh2_hal_spi: SHTP hdr lenField=0x0114 len=276 cont=0 ch=0 seq=0 raw=14 01 00 00[0m
+[0;32mI (370) sh2_hal_spi: TRACE HDR: 14 01 00 00 [0m
+[0;32mI (370) sh2_hal_spi: TRACE PAY: 00 01 04 00 00 00 00 80 06 31 2E 30 2E 30 00 02 02 00 01 03 02 FF 7F 04 02 00 01 05 02 FF 7F 08 [0m
+[0;32mI (380) sh2_hal_spi: INT level=1 (polarity active-low)[0m
+[0;32mI (440) sh2_hal_spi: INT asserted (level=0)[0m
+[0;32mI (440) sh2_hal_spi: SHTP hdr lenField=0x0014 len=20 cont=0 ch=2 seq=0 raw=14 00 02 00[0m
+[0;32mI (440) sh2_hal_spi: TRACE HDR: 14 00 02 00 [0m
+[0;32mI (440) sh2_hal_spi: TRACE PAY: F1 00 84 00 00 00 01 00 00 00 00 00 00 00 00 00 [0m
+[0;32mI (450) sh2_ctrl: CTRL PAY (16): F1 00 84 00 00 00 01 00 00 00 00 00 00 00 00 00 [0m
+[0;32mI (450) sh2_hal_spi: INT level=1 (polarity active-low)[0m
+[0;32mI (460) sh2_hal_spi: INT asserted (level=0)[0m
+[0;32mI (460) sh2_hal_spi: SHTP hdr lenField=0x0005 len=5 cont=0 ch=1 seq=0 raw=05 00 01 00[0m
+[0;32mI (470) sh2_hal_spi: TRACE HDR: 05 00 01 00 [0m
+[0;32mI (470) sh2_hal_spi: TRACE PAY: 01 [0m
+[0;32mI (480) bno08x: SH2 reset complete[0m
+[0;32mI (480) bno08x: sh2_open rc=0[0m
+[0;32mI (480) sh2_hal_spi: SHTP tx len=5[0m
+[0;32mI (490) sh2_hal_spi: INT asserted (level=1)[0m
+[0;32mI (490) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+[0;32mI (500) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+repeating
+[0;32mI (980) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+[0;32mI (990) bno08x: INT level (startup)=1[0m
+[0;32mI (1190) sh2_hal_spi: SHTP tx len=5[0m
+[0;32mI (1240) sh2_hal_spi: SHTP tx len=16[0m
+[0;32mI (1740) bno08x: sh2_reinitialize rc=-6[0m
+[0;32mI (1740) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+repeating
+[0;32mI (1800) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+[0;32mI (1800) sh2_hal_spi: SHTP tx len=21[0m
+[0;32mI (1810) bno08x: setSensorConfig grv rc=0[0m
+[0;32mI (1810) sh2_hal_spi: SHTP tx len=6[0m
+[0;32mI (1810) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+repeating
+[0;32mI (2160) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+[0;32mI (2170) gimbal_main: imu ax=0.00 ay=0.00 az=0.00 gx=0.00 gy=0.00 gz=0.00 | tilt=0.00 off=0.00 err=0.00 servo=0.00 pwm=1500us[0m
+[0;32mI (2180) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+repeating
+[0;32mI (2710) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+[0;32mI (2720) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m
+[0;32mI (2730) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+repeating
+[0;32mI (2800) sh2_hal_spi: SHTP hdr lenField=0x0000 len=0 cont=0 ch=0 seq=0 raw=00 00 00 00[0m
+[0;32mI (3710) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m
+[0;32mI (4180) gimbal_main: imu ax=0.00 ay=0.00 az=0.00 gx=0.00 gy=0.00 gz=0.00 | tilt=0.00 off=0.00 err=0.00 servo=0.00 pwm=1500us[0m
+[0;32mI (4720) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m
+[0;32mI (5730) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m
+[0;32mI (6180) gimbal_main: imu ax=0.00 ay=0.00 az=0.00 gx=0.00 gy=0.00 gz=0.00 | tilt=0.00 off=0.00 err=0.00 servo=0.00 pwm=1500us[0m
+[0;32mI (6740) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m
+[0;32mI (7750) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m
+[0;32mI (8180) gimbal_main: imu ax=0.00 ay=0.00 az=0.00 gx=0.00 gy=0.00 gz=0.00 | tilt=0.00 off=0.00 err=0.00 servo=0.00 pwm=1500us[0m
+[0;32mI (8760) bno08x: dbg: int=1 ready=1 enabled=1 last_evt_ms=4294967295 acc_on=0 gyro_on=0 rc_a=-6 rc_g=-6[0m

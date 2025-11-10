@@ -1,0 +1,195 @@
+menu "Gimbal Project"
+
+config GIMBAL_LOOP_HZ
+    int "Control loop frequency (Hz)"
+    default 10
+
+config GIMBAL_ALPHA
+    int "Complementary filter alpha x1000 (0..1000)"
+    range 0 1000
+    default 980
+
+config GIMBAL_PID_KP
+    int "PID Kp x1000"
+    default 1200
+
+config GIMBAL_PID_KI
+    int "PID Ki x1000"
+    default 0
+
+config GIMBAL_PID_KD
+    int "PID Kd x1000"
+    default 50
+
+config GIMBAL_ANTENNA_LIMIT_DEG
+    int "Antenna angle limit +/- (deg)"
+    default 32
+
+config GIMBAL_SERVO_LIMIT_DEG
+    int "Servo angle limit +/- (deg)"
+    default 105
+
+config GIMBAL_MECH_RATIO
+    int "Mechanical ratio x1000 (servo/antenna)"
+    default 3280
+
+comment "IMU selection"
+
+choice GIMBAL_IMU_SELECT
+    prompt "IMU driver"
+    default GIMBAL_IMU_SELECT_EMULATOR
+    help
+        Select the IMU used. Keep code switchable.
+
+config GIMBAL_IMU_SELECT_EMULATOR
+    bool "Emulator (no hardware)"
+
+config GIMBAL_IMU_SELECT_ICM42688P
+    bool "ICM-42688-P"
+
+config GIMBAL_IMU_SELECT_BNO08X
+    bool "BNO08X (BNO080/085)"
+
+endchoice
+
+config GIMBAL_ICM_USE_SPI
+    bool "Use SPI for ICM-42688-P"
+    default y
+    depends on GIMBAL_IMU_SELECT_ICM42688P
+
+config GIMBAL_ICM_USE_I2C
+    bool "Use I2C for ICM-42688-P"
+    default n
+    depends on GIMBAL_IMU_SELECT_ICM42688P
+
+config GIMBAL_SPI_SCLK_GPIO
+    int "SPI SCLK GPIO"
+    default 4
+
+config GIMBAL_SPI_MOSI_GPIO
+    int "SPI MOSI GPIO"
+    default 6
+
+config GIMBAL_SPI_MISO_GPIO
+    int "SPI MISO GPIO"
+    default 5
+
+config GIMBAL_SPI_CS_GPIO
+    int "SPI CS GPIO"
+    default 7
+
+config GIMBAL_BNO08X_SPI_MODE
+    int "BNO08x SPI mode (0..3)"
+    depends on GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_SPI
+    range 0 3
+    default 0
+
+config GIMBAL_I2C_SDA_GPIO
+    int "I2C SDA GPIO"
+    default 8
+
+config GIMBAL_I2C_SCL_GPIO
+    int "I2C SCL GPIO"
+    default 9
+
+config GIMBAL_I2C_FREQ_HZ
+    int "I2C clock (Hz)"
+    default 400000
+
+config GIMBAL_BNO08X_ADDR
+    hex "BNO08x I2C address"
+    default 0x4A
+
+config GIMBAL_BNO08X_INT_GPIO
+    int "BNO08x INT GPIO (-1 to disable)"
+    depends on GIMBAL_IMU_SELECT_BNO08X
+    default 9
+
+config GIMBAL_BNO08X_INT_ACTIVE_LOW
+    bool "BNO08x INT is active-low"
+    depends on GIMBAL_IMU_SELECT_BNO08X
+    default y
+
+config GIMBAL_BNO08X_SPI_TRACE
+    bool "Enable BNO08x SPI trace (first packets)"
+    depends on GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_SPI
+    default n
+
+config GIMBAL_BNO08X_WAKE_GPIO
+    int "BNO08x WAKE GPIO (-1 to disable)"
+    depends on GIMBAL_IMU_SELECT_BNO08X
+    default -1
+
+config GIMBAL_BNO08X_RST_GPIO
+    int "BNO08x RESET GPIO (-1 to disable)"
+    depends on GIMBAL_IMU_SELECT_BNO08X
+    default -1
+
+choice GIMBAL_BNO08X_TRANSPORT
+    prompt "BNO08x transport"
+    depends on GIMBAL_IMU_SELECT_BNO08X
+    default GIMBAL_BNO08X_USE_SPI
+
+config GIMBAL_BNO08X_USE_I2C
+    bool "I2C"
+
+config GIMBAL_BNO08X_USE_SPI
+    bool "SPI"
+
+endchoice
+
+config GIMBAL_SERVO_GPIO
+    int "Servo PWM GPIO"
+    default 10
+
+config GIMBAL_SERVO_FREQ_HZ
+    int "Servo PWM frequency (Hz)"
+    default 50
+
+config GIMBAL_SERVO_MIN_US
+    int "Servo min pulse (us)"
+    default 500
+
+config GIMBAL_SERVO_MAX_US
+    int "Servo max pulse (us)"
+    default 2500
+
+config GIMBAL_BUTTON_GPIO
+    int "Calibration button GPIO (active-low)"
+    default 1
+
+config GIMBAL_BUTTON_LONG_MS
+    int "Long-press duration (ms)"
+    default 2000
+
+comment "UART-RVC sniffer (BNO08x transport sanity test)"
+
+config GIMBAL_UART_RVC_SNIFFER
+    bool "Enable UART-RVC sniffer task (disables IMU/SPI)"
+    default n
+    help
+        When enabled, the app will not initialize the IMU or SPI pins.
+        Instead, it starts a small UART reader that logs incoming bytes
+        from the BNO08x when strapped to UART-RVC mode (PS1=HIGH, PS0=LOW).
+
+config GIMBAL_UART_PORT
+    int "UART port for RVC sniffer"
+    default 1
+    depends on GIMBAL_UART_RVC_SNIFFER
+
+config GIMBAL_UART_RX_GPIO
+    int "UART RX GPIO (ESP32-C3 pin wired to BNO TX)"
+    default 5
+    depends on GIMBAL_UART_RVC_SNIFFER
+
+config GIMBAL_UART_TX_GPIO
+    int "UART TX GPIO (-1 to disable)"
+    default -1
+    depends on GIMBAL_UART_RVC_SNIFFER
+
+config GIMBAL_UART_BAUD
+    int "UART baud rate"
+    default 115200
+    depends on GIMBAL_UART_RVC_SNIFFER
+
+endmenu
