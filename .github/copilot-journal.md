@@ -385,3 +385,24 @@ Risks/notes:
 * If steady-state error remains, introduce a small Ki (e.g., 50–100 → 0.05–0.10) and add anti-windup later if needed.
 Next actions:
 * Rebuild/flash and evaluate step response (tilt by hand). Adjust Kp/Kd in small increments; consider enabling a small Ki once stable.
+
+Date: 2025-11-12
+Context:
+* Reaction speed acceptable; goal is to reduce jitter/noise around small movements without sacrificing responsiveness. Also created a test release tag.
+Decisions:
+* Keep fast loop (100 Hz) and current gains as baseline, but make the controller more noise-robust using signal shaping rather than reducing Kp.
+Changes made:
+* BNO08x driver: Converted gyro from rad/s → deg/s in sensor_cb (fixes predictive branch magnitude); increased report rate to 200 Hz to cut data latency.
+* Control loop (main.c):
+	- Derivative-on-measurement: D term uses gyro rate (deg/s) with a 1st‑order low‑pass (~10 Hz) to avoid amplifying position noise.
+	- Smooth deadband: ±0.3° around zero error to prevent hunting; subtracts the deadband beyond the threshold for smooth engagement.
+	- Output smoothing: 1st‑order low‑pass on servo command with ~80 ms time constant to remove high-frequency jitter.
+* Tag: created annotated tag `0.1-test` on main.
+Observed effect:
+* Noticeably steadier output around small deviations; no obvious loss of response to larger/faster motions.
+Open questions / risks:
+* Axis mapping: ensure pitch rate axis (currently gx) matches physical mounting; switch to gy if needed for maximum damping effect.
+* Parameter exposure: consider promoting deadband, derivative cutoff, and output smoothing tau to Kconfig for easier tuning.
+Next actions:
+* Validate behavior across the full motion range; if any residual buzz remains, try: deadband 0.4–0.5°, d_cut 8–10 Hz, out_tau 0.1–0.12 s.
+* Optionally introduce a small Ki (0.05–0.10) once stable to eliminate small steady‑state bias; add simple anti‑windup clamp if enabled.

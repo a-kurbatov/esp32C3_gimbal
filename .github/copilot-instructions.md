@@ -186,3 +186,14 @@ If you confirm those, I will scaffold an ESP-IDF project with:
 5. Include wiring notes and default I2C address(s) in `README.md` and this file after testing on hardware.
 
 If you want I will: create the IMU adapter scaffold, add a BNO08x implementation that uses an existing driver, and add a CodeCell adapter stub — tell me the preferred build system and whether PlatformIO board IDs or ESP-IDF target names should be used.
+
+---
+
+2-axis MSP mode (new)
+
+- Source: MSP from Betaflight 4.4.2+ at 115200 on UART1 (defaults RX=GPIO5, TX=GPIO6). Polls MSP v1 MSP_ATTITUDE at 50–100 Hz.
+- Actuators: 2 servos — pitch on GPIO10 (existing), yaw on GPIO8 (new LEDC channel 1). PWM 50 Hz; default 500–2500 µs mapping.
+- Target capture: long-press captures pre-flight azimuth (horizon). Controller holds that world-fixed direction in flight.
+- Controller: computes world target vector [cos(az), sin(az), 0], transforms to body using assumed R = Rz(yaw) Ry(pitch) Rx(roll), then decomposes to yaw_cmd = atan2(vB.y, vB.x), pitch_cmd = atan2(-vB.z, sqrt(vB.x^2+vB.y^2)). Applies small deadband and output smoothing.
+- TODOs: verify axis conventions (signs/order) and add Kconfig flips; add NVS persistence for azimuth; add per-axis mechanics/limits; MSP robustness (timeouts/resync/v2); expose gains and smoothing in Kconfig.
+- Logs: monitor-parsable format — "MSP reads: roll=.. pitch=.. yaw=..; gimbal_rel: pitch=.. yaw=.." at ~2 Hz.

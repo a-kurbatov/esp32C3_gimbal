@@ -177,7 +177,14 @@ static void bno08x_spi_task(void *arg)
     sh2_Hal_t *hal = sh2_hal_spi_get();
     #elif CONFIG_GIMBAL_BNO08X_USE_I2C
     sh2_Hal_t *hal = sh2_hal_i2c_get();
+    #else
+    sh2_Hal_t *hal = NULL;
     #endif
+    if (hal == NULL) {
+        ESP_LOGW(TAG, "BNO08x transport not enabled; task exiting");
+        vTaskDelete(NULL);
+        return;
+    }
     int rc = sh2_open(hal, event_cb, NULL);
     ESP_LOGI(TAG, "sh2_open rc=%d", rc);
     // Issue a device reset to ensure adverts and a clean start

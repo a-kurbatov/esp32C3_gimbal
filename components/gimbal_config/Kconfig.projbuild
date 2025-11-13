@@ -50,6 +50,13 @@ config GIMBAL_IMU_SELECT_ICM42688P
 config GIMBAL_IMU_SELECT_BNO08X
     bool "BNO08X (BNO080/085)"
 
+config GIMBAL_IMU_SELECT_MSP_2AXIS
+    bool "MSP IMU (2-axis via FC)"
+    help
+        Use MSP (MultiWii Serial Protocol) from a flight controller (e.g., Betaflight 4.4.2+)
+        at 115200 baud to obtain yaw/pitch data. This mode targets 2-axis control
+        (yaw + pitch) and disables SPI IMU usage.
+
 endchoice
 
 config GIMBAL_ICM_USE_SPI
@@ -65,18 +72,22 @@ config GIMBAL_ICM_USE_I2C
 config GIMBAL_SPI_SCLK_GPIO
     int "SPI SCLK GPIO"
     default 4
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_SPI) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_SPI)
 
 config GIMBAL_SPI_MOSI_GPIO
     int "SPI MOSI GPIO"
     default 6
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_SPI) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_SPI)
 
 config GIMBAL_SPI_MISO_GPIO
     int "SPI MISO GPIO"
     default 5
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_SPI) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_SPI)
 
 config GIMBAL_SPI_CS_GPIO
     int "SPI CS GPIO"
     default 7
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_SPI) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_SPI)
 
 config GIMBAL_BNO08X_SPI_MODE
     int "BNO08x SPI mode (0..3)"
@@ -87,18 +98,22 @@ config GIMBAL_BNO08X_SPI_MODE
 config GIMBAL_I2C_SDA_GPIO
     int "I2C SDA GPIO"
     default 8
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_I2C) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_I2C)
 
 config GIMBAL_I2C_SCL_GPIO
     int "I2C SCL GPIO"
     default 9
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_I2C) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_I2C)
 
 config GIMBAL_I2C_FREQ_HZ
     int "I2C clock (Hz)"
     default 400000
+    depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_I2C) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_I2C)
 
 config GIMBAL_BNO08X_ADDR
     hex "BNO08x I2C address"
     default 0x4A
+    depends on GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_I2C
 
 config GIMBAL_BNO08X_INT_GPIO
     int "BNO08x INT GPIO (-1 to disable)"
@@ -191,5 +206,32 @@ config GIMBAL_UART_BAUD
     int "UART baud rate"
     default 115200
     depends on GIMBAL_UART_RVC_SNIFFER
+
+endmenu
+
+menu "MSP (2-axis) Settings"
+    depends on GIMBAL_IMU_SELECT_MSP_2AXIS
+
+config GIMBAL_MSP_UART_PORT
+    int "MSP UART port"
+    default 1
+
+config GIMBAL_MSP_UART_RX_GPIO
+    int "MSP UART RX GPIO (FC TX to ESP32 RX)"
+    default 5
+
+config GIMBAL_MSP_UART_TX_GPIO
+    int "MSP UART TX GPIO (ESP32 TX to FC RX)"
+    default 6
+
+config GIMBAL_MSP_UART_BAUD
+    int "MSP UART baud rate"
+    default 115200
+
+config GIMBAL_SERVO_YAW_GPIO
+    int "Yaw Servo PWM GPIO"
+    default 8
+
+comment "TODO: Add per-axis mechanics and ranges (min/max us, ratio, limits)"
 
 endmenu

@@ -8,10 +8,14 @@
 
 #include "imu/imu.h"
 #include "imu/imu_types.h"
+#if CONFIG_GIMBAL_IMU_SELECT_MSP_2AXIS
+#include "imu_msp.h"
+#endif
 #include "servo_pwm.h"
 #include "button.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 
 static const char *TAG = "gimbal_main";
 
@@ -51,6 +55,76 @@ static void on_longpress(void *ctx)
     s_horizon_offset_deg = *last_tilt;
     save_offset_nvs();
 }
+
+#if CONFIG_GIMBAL_IMU_SELECT_MSP_2AXIS
+// TODO: Axis conventions: verify MSP roll/pitch/yaw signs and rotation order on your FC.
+// Assumptions (to be confirmed):
+// - Yaw positive CCW (Z-up), Pitch positive nose-up, Roll positive right-wing-down.
+// - Body rotation R = Rz(yaw) * Ry(pitch) * Rx(roll).
+// - Gimbal kinematics: yaw axis first (Z), then pitch about rotated Y'.
+// These affect sign flips in the decomposition below.
+
+typedef struct {
+    float yaw_deg;
+    float pitch_deg;
+    float roll_deg;
+} last_att_t;
+
+static float s_target_azimuth_deg = 0.0f; // world azimuth target captured on long-press
+static inline float deg2rad(float d) { return d * ((float)M_PI / 180.0f); }
+static inline float rad2deg(float r) { return r * (180.0f / (float)M_PI); }
+
+static void on_longpress_msp(void *ctx)
+{
+    last_att_t *la = (last_att_t *)ctx;
+    // Capture current world azimuth (yaw) as target; horizon assumed (pitch=0)
+    s_target_azimuth_deg = la->yaw_deg;
+    ESP_LOGI(TAG, "Captured MSP target azimuth: %.1f deg (horizon)", s_target_azimuth_deg);
+    // TODO: persist to NVS for reboot retention
+}
+
+// Minimal second servo (yaw) on a separate LEDC channel using same timer as servo_pwm
+static struct {
+    ledc_channel_t ch;
+    ledc_timer_t timer;
+    int gpio;
+    uint32_t max_duty;
+    int min_us, max_us;
+} s_yaw_servo;
+
+static esp_err_t yaw_servo_init(int gpio, int freq_hz, int min_us, int max_us)
+{
+    s_yaw_servo.gpio = gpio;
+    s_yaw_servo.ch = LEDC_CHANNEL_1; // pitch uses channel 0 inside servo_pwm
+    s_yaw_servo.timer = LEDC_TIMER_0; // reuse same timer config
+    s_yaw_servo.min_us = min_us; s_yaw_servo.max_us = max_us;
+    const ledc_channel_config_t ccfg = {
+        .gpio_num = gpio,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = s_yaw_servo.ch,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = s_yaw_servo.timer,
+        .duty = 0,
+        .hpoint = 0,
+        .flags.output_invert = 0,
+    };
+    esp_err_t err = ledc_channel_config(&ccfg);
+    s_yaw_servo.max_duty = (1u << LEDC_TIMER_14_BIT) - 1; // matches servo_pwm
+    return err;
+}
+
+static void yaw_servo_write_angle(float angle_deg, float min_angle_deg, float max_angle_deg)
+{
+    if (max_angle_deg <= min_angle_deg) return;
+    float t = (angle_deg - min_angle_deg) / (max_angle_deg - min_angle_deg);
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    int pulse = s_yaw_servo.min_us + (int)((s_yaw_servo.max_us - s_yaw_servo.min_us) * t);
+    const uint32_t period_us = 1000000UL / CONFIG_GIMBAL_SERVO_FREQ_HZ;
+    uint32_t duty = (uint32_t)((((uint64_t)pulse) * s_yaw_servo.max_duty) / period_us);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, s_yaw_servo.ch, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, s_yaw_servo.ch);
+}
+#endif // CONFIG_GIMBAL_IMU_SELECT_MSP_2AXIS
 
 typedef struct {
     float kp, ki, kd;
@@ -159,33 +233,61 @@ void app_main(void)
     // Not reached
 #endif
 
-    // IMU
+    // IMU/Source selection
+#if CONFIG_GIMBAL_IMU_SELECT_MSP_2AXIS
+    // MSP 2-axis source
+    ESP_ERROR_CHECK(imu_msp_init());
+#else
+    // Legacy single-axis IMU
     imu_driver_t *imu = imu_get();
     ESP_ERROR_CHECK(imu->v->init());
+#endif
 
     // Load calibration
     load_offset_nvs();
 
     // Button
     static float last_tilt_deg = 0.0f;
+#if CONFIG_GIMBAL_IMU_SELECT_MSP_2AXIS
+    static last_att_t last_att = {0};
+    button_cfg_t bcfg = {
+        .gpio = CONFIG_GIMBAL_BUTTON_GPIO,
+        .long_ms = CONFIG_GIMBAL_BUTTON_LONG_MS,
+        .on_long = on_longpress_msp,
+        .user_ctx = &last_att,
+    };
+#else
     button_cfg_t bcfg = {
         .gpio = CONFIG_GIMBAL_BUTTON_GPIO,
         .long_ms = CONFIG_GIMBAL_BUTTON_LONG_MS,
         .on_long = on_longpress,
         .user_ctx = &last_tilt_deg,
     };
+#endif
     ESP_ERROR_CHECK(button_init(&bcfg));
 
+    // Complementary filter and PID setup
     const float alpha = CONFIG_GIMBAL_ALPHA / 1000.0f;
-    pid_t pid; pid_init(&pid,
-                        CONFIG_GIMBAL_PID_KP / 1000.0f,
-                        CONFIG_GIMBAL_PID_KI / 1000.0f,
-                        CONFIG_GIMBAL_PID_KD / 1000.0f);
+    const float kp = CONFIG_GIMBAL_PID_KP / 1000.0f;
+    const float ki = CONFIG_GIMBAL_PID_KI / 1000.0f;
+    const float kd_rate = CONFIG_GIMBAL_PID_KD / 1000.0f; // derivative on measurement (gyro) gain
+    pid_t pid; pid_init(&pid, kp, ki, 0.0f); // kd=0 inside; D handled from gyro directly
 
     const float dt = 1.0f / CONFIG_GIMBAL_LOOP_HZ; // seconds
     const int loop_delay_ms = (int)(dt * 1000.0f);
 
     float tilt_filt = 0; // deg
+
+    // Noise reduction helpers (legacy IMU path)
+    const float deadband_deg = 0.3f;           // ignore tiny errors (adjust 0.2..0.5)
+    const float d_cut_hz = 10.0f;              // derivative (gyro) low-pass cutoff (Hz)
+    const float out_tau_s = 0.08f;             // output smoothing time constant (s) ~80 ms
+    // Derived coefficients
+    const float d_alpha = dt / (dt + (1.0f / (2.0f * (float)M_PI * d_cut_hz))); // 1st order LPF
+    const float out_alpha = expf(-dt / out_tau_s);
+    // States
+    float gyro_filt = 0.0f;                    // deg/s
+    float servo_cmd_deg = 0.0f;                // filtered servo command (deg)
 
     int log_count = 0;
     const int log_every = (int)(2.0f / dt); // 2 Hz
@@ -194,6 +296,93 @@ void app_main(void)
         // (shouldn't happen with 10 Hz)
     }
 
+#if CONFIG_GIMBAL_IMU_SELECT_MSP_2AXIS
+    // Initialize yaw servo channel
+    ESP_ERROR_CHECK(yaw_servo_init(CONFIG_GIMBAL_SERVO_YAW_GPIO,
+                                   CONFIG_GIMBAL_SERVO_FREQ_HZ,
+                                   CONFIG_GIMBAL_SERVO_MIN_US,
+                                   CONFIG_GIMBAL_SERVO_MAX_US));
+    // Neutral both servos at boot
+    servo_pwm_write_us((CONFIG_GIMBAL_SERVO_MIN_US + CONFIG_GIMBAL_SERVO_MAX_US)/2);
+    yaw_servo_write_angle(0.0f, -CONFIG_GIMBAL_SERVO_LIMIT_DEG, +CONFIG_GIMBAL_SERVO_LIMIT_DEG);
+
+    // Control parameters
+    const float out_tau_s = 0.08f; // output smoothing time constant
+    const float dt = 1.0f / CONFIG_GIMBAL_LOOP_HZ;
+    const float out_alpha = expf(-dt / out_tau_s);
+    const float deadband_deg = 0.3f;
+    float yaw_cmd_deg = 0.0f, pitch_cmd_deg = 0.0f;
+    float yaw_out_deg = 0.0f, pitch_out_deg = 0.0f;
+
+    while (1) {
+        button_poll();
+        msp_att_t att;
+        if (imu_msp_read(&att) == ESP_OK) {
+            last_att.yaw_deg = att.yaw_deg;
+            last_att.pitch_deg = att.pitch_deg;
+            last_att.roll_deg = att.roll_deg;
+
+            // World target vector from captured azimuth (horizon)
+            float az = deg2rad(s_target_azimuth_deg);
+            float vW_x = cosf(az), vW_y = sinf(az), vW_z = 0.0f;
+
+            // Rotation R = Rz(y) Ry(p) Rx(r) -> v_body = R^T * v_world
+            float y = deg2rad(att.yaw_deg);
+            float p = deg2rad(att.pitch_deg);
+            float r = deg2rad(att.roll_deg);
+            float cy = cosf(y), sy = sinf(y);
+            float cp = cosf(p), sp = sinf(p);
+            float cr = cosf(r), sr = sinf(r);
+            float R00 = cy*cp;
+            float R01 = cy*sp*sr - sy*cr;
+            float R02 = cy*sp*cr + sy*sr;
+            float R10 = sy*cp;
+            float R11 = sy*sp*sr + cy*cr;
+            float R12 = sy*sp*cr - cy*sr;
+            float R20 = -sp;
+            float R21 = cp*sr;
+            float R22 = cp*cr;
+            float vB_x = R00*vW_x + R01*vW_y + R02*vW_z;
+            float vB_y = R10*vW_x + R11*vW_y + R12*vW_z;
+            float vB_z = R20*vW_x + R21*vW_y + R22*vW_z;
+
+            // Decompose for yaw->pitch mechanism (see TODO for axis conventions)
+            yaw_cmd_deg = rad2deg(atan2f(vB_y, vB_x));
+            pitch_cmd_deg = rad2deg(atan2f(-vB_z, sqrtf(vB_x*vB_x + vB_y*vB_y)));
+
+            // Deadband
+            if (fabsf(yaw_cmd_deg) < deadband_deg) yaw_cmd_deg = 0.0f;
+            if (fabsf(pitch_cmd_deg) < deadband_deg) pitch_cmd_deg = 0.0f;
+
+            // Smooth outputs
+            yaw_out_deg = out_alpha * yaw_out_deg + (1.0f - out_alpha) * yaw_cmd_deg;
+            pitch_out_deg = out_alpha * pitch_out_deg + (1.0f - out_alpha) * pitch_cmd_deg;
+
+            // Map to servo angles via mechanical ratio and clamp to servo limits
+            float ratio = CONFIG_GIMBAL_MECH_RATIO / 1000.0f;
+            float servo_lim = CONFIG_GIMBAL_SERVO_LIMIT_DEG;
+            float yaw_servo = yaw_out_deg * ratio;
+            float pitch_servo = pitch_out_deg * ratio;
+            if (yaw_servo > servo_lim) yaw_servo = servo_lim;
+            if (yaw_servo < -servo_lim) yaw_servo = -servo_lim;
+            if (pitch_servo > servo_lim) pitch_servo = servo_lim;
+            if (pitch_servo < -servo_lim) pitch_servo = -servo_lim;
+
+            // Write servos
+            yaw_servo_write_angle(yaw_servo, -servo_lim, +servo_lim);
+            servo_pwm_write_angle(pitch_servo, -servo_lim, +servo_lim);
+
+            if (++log_count >= log_every) {
+                log_count = 0;
+                // Requested concise format for monitor parsing
+                ESP_LOGI(TAG, "MSP reads: roll=%.1f pitch=%.1f yaw=%.1f; gimbal_rel: pitch=%.1f yaw=%.1f",
+                         att.roll_deg, att.pitch_deg, att.yaw_deg,
+                         pitch_out_deg, yaw_out_deg);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(loop_delay_ms));
+    }
+#else
     while (1) {
         button_poll();
 
@@ -212,18 +401,30 @@ void app_main(void)
             float platform_tilt = tilt_filt - s_horizon_offset_deg;
             float target_antenna = 0.0f; // keep level
             float error = target_antenna - platform_tilt;
+            // Smooth deadband around zero
+            if (fabsf(error) < deadband_deg) {
+                error = 0.0f;
+            } else {
+                error = copysignf(fabsf(error) - deadband_deg, error);
+            }
 
             // Clamp to antenna ±limit
             float ant_lim = CONFIG_GIMBAL_ANTENNA_LIMIT_DEG;
             if (error > ant_lim) error = ant_lim;
             if (error < -ant_lim) error = -ant_lim;
 
-            // PID
-            float u = pid_update(&pid, error, dt);
+            // PID: P+I from error, D from (filtered) gyro (negative rate feedback)
+            float u_pi = pid_update(&pid, error, dt); // kd=0 inside
+            gyro_filt += d_alpha * (gyro_pitch_degps - gyro_filt);
+            float u_d = -kd_rate * gyro_filt;
+            float u = u_pi + u_d;
 
             // Convert to servo angle via mechanical ratio and clamp to servo ±limit
             float servo_lim = CONFIG_GIMBAL_SERVO_LIMIT_DEG;
-            float servo_angle = u * (CONFIG_GIMBAL_MECH_RATIO / 1000.0f); // deg
+            float servo_angle_cmd = u * (CONFIG_GIMBAL_MECH_RATIO / 1000.0f); // deg
+            // Output smoothing to reduce jitter
+            servo_cmd_deg = out_alpha * servo_cmd_deg + (1.0f - out_alpha) * servo_angle_cmd;
+            float servo_angle = servo_cmd_deg;
             if (servo_angle > servo_lim) servo_angle = servo_lim;
             if (servo_angle < -servo_lim) servo_angle = -servo_lim;
 
@@ -244,4 +445,5 @@ void app_main(void)
 
         vTaskDelay(pdMS_TO_TICKS(loop_delay_ms));
     }
+#endif
 }
