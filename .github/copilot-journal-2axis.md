@@ -115,3 +115,16 @@ Open questions / risks:
 - Optional asymmetry (e.g., right 270, left 90) can be reintroduced via config; current servo-centric default is symmetric limits from half-swing.
 Next actions:
 - Optionally expose flip timing/cooldown/hysteresis in Kconfig; allow asymmetric left/right limits; tune yaw->pitch taper curve; document yaw calibration in README.
+
+Date: 2025-11-18
+Context:
+- Safety constraint added to protect mechanics: configurable max allowed yaw servo angle distinct from physical/nominal travel. Controller clamps commands to the safe window.
+Decisions:
+- Keep servo-centric mapping but enforce a separate "allowed" envelope so destructive end-stop rotations are avoided.
+Changes made:
+- Kconfig: added GIMBAL_YAW_SERVO_ALLOWED_DEG (total allowed deg; controller clamps to ±allowed/2). Defaults added in sdkconfig.defaults.
+- main.c (MSP path): compute servo_half_allowed_deg; derive gimbal limits from allowed half-swing and yaw gearing; clamp yaw_servo to ±servo_half_allowed_deg; write yaw with these limits.
+Open questions / risks:
+- Consider asymmetric allowed windows per direction if needed (e.g., +larger to right, smaller to left).
+Next actions:
+- Expose flip timing/cooldown/hysteresis in Kconfig; optionally add asymmetric yaw limits; update README with safety guidance and calibration steps.

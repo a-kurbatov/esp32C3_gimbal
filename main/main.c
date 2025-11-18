@@ -341,7 +341,7 @@ void app_main(void)
     float yaw_out_deg = 0.0f, pitch_out_deg = 0.0f;
     // Wrap/flip state and limits
     static float prev_gimbal_yaw_cmd = 0.0f;     // deg (pre-smoothing)
-    const float servo_cmd_limit_deg = CONFIG_GIMBAL_YAW_SERVO_MAX_DEG / 2.0f; // half-swing limit
+    const float servo_half_allowed_deg = CONFIG_GIMBAL_YAW_SERVO_ALLOWED_DEG / 2.0f; // enforce safe window
     const float yaw_ratio_servo_per_ant = CONFIG_GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000 / 1000.0f;
     const float beam_half_deg = CONFIG_GIMBAL_ANTENNA_OPENING_DEG / 2.0f;
     static float phase_deg = 0.0f;               // multiples of 360 applied for wrap branch
@@ -386,8 +386,8 @@ void app_main(void)
             if (fabsf(e_eff) <= beam_half_deg) e_eff = 0.0f; else e_eff = copysignf(fabsf(e_eff) - beam_half_deg, e_eff);
 
             // Directional gimbal yaw limits based on servo swing and yaw gearing
-            float gimbal_left_limit  = servo_cmd_limit_deg / yaw_ratio_servo_per_ant; // e > 0 (left)
-            float gimbal_right_limit = servo_cmd_limit_deg / yaw_ratio_servo_per_ant; // e < 0 (right)
+            float gimbal_left_limit  = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // e > 0 (left)
+            float gimbal_right_limit = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // e < 0 (right)
             // Asymmetric range per request: left up to +90, right up to -270 (subject to servo swing)
             if (gimbal_left_limit  > 90.0f)  gimbal_left_limit  = 90.0f;
             if (gimbal_right_limit > 270.0f) gimbal_right_limit = 270.0f;
@@ -444,13 +444,13 @@ void app_main(void)
             float servo_lim = CONFIG_GIMBAL_SERVO_LIMIT_DEG;
             float yaw_servo = yaw_out_deg * yaw_ratio_servo_per_ant;
             float pitch_servo = pitch_out_deg * ratio;
-            if (yaw_servo > servo_cmd_limit_deg) yaw_servo = servo_cmd_limit_deg;
-            if (yaw_servo < -servo_cmd_limit_deg) yaw_servo = -servo_cmd_limit_deg;
+            if (yaw_servo > servo_half_allowed_deg) yaw_servo = servo_half_allowed_deg;
+            if (yaw_servo < -servo_half_allowed_deg) yaw_servo = -servo_half_allowed_deg;
             if (pitch_servo > servo_lim) pitch_servo = servo_lim;
             if (pitch_servo < -servo_lim) pitch_servo = -servo_lim;
 
             // Write servos
-            yaw_servo_write_angle(yaw_servo, -servo_lim, +servo_lim);
+            yaw_servo_write_angle(yaw_servo, -servo_half_allowed_deg, +servo_half_allowed_deg);
             servo_pwm_write_angle(pitch_servo, -servo_lim, +servo_lim);
 
             if (++log_count >= log_every) {

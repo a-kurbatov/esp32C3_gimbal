@@ -253,6 +253,15 @@ config GIMBAL_YAW_SERVO_MAX_DEG
     range 60 360
     default 180
 
+config GIMBAL_YAW_SERVO_ALLOWED_DEG
+    int "Yaw servo allowed travel (deg)"
+    help
+        Restrict the commanded yaw servo travel to protect mechanics. For example, if the servo is
+        capable of 270°, set this to 250° to keep 10° margin on both ends. Controller will never
+        command outside ±(allowed/2).
+    range 10 360
+    default 180
+
 config GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000
     int "Yaw gearing: servo deg per antenna deg x1000"
     help
