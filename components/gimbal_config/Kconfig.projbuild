@@ -97,12 +97,12 @@ config GIMBAL_BNO08X_SPI_MODE
 
 config GIMBAL_I2C_SDA_GPIO
     int "I2C SDA GPIO"
-    default 8
+    default 7
     depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_I2C) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_I2C)
 
 config GIMBAL_I2C_SCL_GPIO
     int "I2C SCL GPIO"
-    default 9
+    default 3
     depends on (GIMBAL_IMU_SELECT_ICM42688P && GIMBAL_ICM_USE_I2C) || (GIMBAL_IMU_SELECT_BNO08X && GIMBAL_BNO08X_USE_I2C)
 
 config GIMBAL_I2C_FREQ_HZ
@@ -118,7 +118,7 @@ config GIMBAL_BNO08X_ADDR
 config GIMBAL_BNO08X_INT_GPIO
     int "BNO08x INT GPIO (-1 to disable)"
     depends on GIMBAL_IMU_SELECT_BNO08X
-    default 9
+    default -1
 
 config GIMBAL_BNO08X_INT_ACTIVE_LOW
     bool "BNO08x INT is active-low"

@@ -1,3 +1,39 @@
+2025-11-18
+- Context: Yaw flips were cancelling or spiking servo to opposite limit. Needed clamp-gated flips, dwell, and correct branch actuation.
+- Decisions: Flip only near clamp with dwell + hysteresis; once started, commit the flip. During flip, actuate using destination branch directly. Normalize branch offset after flip. Improve logs and rate.
+- Changes made:
+	- main/main.c: Implemented clamp-gated flips (±allowed/2 with 5° margin), 200 ms dwell, 10° hysteresis; removed mid-range flips.
+	- Actuation now uses destination branch during flip to avoid hitting the opposite clamp; normalized branch offset to nearest 360 after completion.
+	- Added `branch=keep|+360|-360` to 5 Hz log line; retained beam-adjusted, unwrapped errors for decisions.
+	- Earlier: added MSP yaw unwrapping; calibration uses unwrapped yaw; updated default I2C pins off strap pins.
+- Results: At limits, flip completes cleanly; servo lands near expected 20–40° on opposite side; no mid-range flip chatter; near full ±90° travel utilized.
+- Next actions: Expose dwell/hysteresis/margin in Kconfig if tuning needed; document behavior in README.
+2025-11-18
+- Context: MSP mode doesn’t use I2C, but default I2C pins (GPIO8/9) are ESP32-C3 straps; external pull-ups can force download boot when no monitor is attached.
+- Decisions: Keep MSP behavior unchanged. Safely move I2C defaults off strap pins and disable default BNO08x INT.
+- Changes made:
+	- Kconfig: I2C SDA default 7, SCL default 3; BNO08x INT default -1.
+	- sdkconfig.defaults: CONFIG_GIMBAL_BNO08X_INT_GPIO=-1.
+	- gimbal_config.h fallbacks updated to SDA=7, SCL=3.
+- Impact: Prevents inadvertent strap-level conflicts at reset. MSP mode unaffected; future I2C modes use safe pins by default.
+- Next: Document wiring note (avoid 8/9 for inputs with pull-ups).
+2025-11-18
+- Context: MSP yaw comes as 0..359..0. Default calibration should treat 0° as forward; long‑press should set “forward” to current heading. Log line needs explicit left/right + degrees.
+- Decisions: Keep existing Kconfig as-is. Add yaw unwrapping (continuous yaw). Make calibration capture unwrapped yaw. Refine log to print direction + magnitude. Keep flip logic and safety clamps unchanged.
+- Changes made:
+	- main/main.c: Added MSP yaw unwrapping state and logic (unwrap 0..359 to continuous).
+	- on_longpress_msp(): now stores the unwrapped yaw as the yaw center (and persists to NVS).
+	- Updated yaw error calculations to use unwrapped yaw everywhere (e_ant/e_final/flip eval).
+	- Logging: "servo=%+..f (left/right X deg)" appended for clarity.
+	- Built successfully; monitor shows expected logs with left/right and degrees.
+- Open questions/risks:
+	- Confirm left/right convention vs mechanical linkage (positive servo = left?).
+	- Flip duration/cooldown suitable? Need Kconfig tunables?
+	- Initial power‑on behavior: we animate branch offset if nearest 360 branch differs; acceptable?
+- Next actions:
+	- If desired, expose flip duration/cooldown and optional asymmetric limits in Kconfig.
+	- Update README with MSP setup, calibration flow, and new log semantics.
+
 # Copilot 2-Axis Project Journal (append-only)
 
 Purpose: Track decisions, changes, and open items for the MSP (2-axis) integration. Append new dated entries only. Do not edit past entries.
@@ -128,19 +164,3 @@ Open questions / risks:
 - Consider asymmetric allowed windows per direction if needed (e.g., +larger to right, smaller to left).
 Next actions:
 - Expose flip timing/cooldown/hysteresis in Kconfig; optionally add asymmetric yaw limits; update README with safety guidance and calibration steps.
-
-Date: 2025-11-18
-Context:
-- Rewrote MSP yaw logic from scratch to use a simple 0..359° heading loop with calibration-based forward, continuous optimal-vector computation, and bounded flip animation only when beyond limit + half beam.
-- Added explicit servo-direction logging to the 2 Hz line to show left/right and magnitude with limits.
-Decisions:
-- Keep existing Kconfig settings (allowed servo angle, yaw ratio, antenna opening) and reuse pitch path; center servo at boot and treat MSP 0° as default forward.
-- Start transitions only when they reduce antenna error considering beam overlap; cap flip speed to ~1 s per 360° with cooldown; cancel if operator backs off.
-Changes made:
-- main.c (MSP section): removed nearest-branch heuristics and phase_* state; added branch_offset_deg with flip_active animation; limit checks use antenna-side limits derived from servo allowed half-swing and gearing; continuous recompute during animation.
-- Logging: appended "servo=%+X (left/right Y) lim=±Z" to gimbal_rel output.
-Open questions / risks:
-- Desired exact log wording for servo info (example given shows "servo=+97 (-120)"); adjust formatting if needed.
-- Verify real FC yaw range and sign; adjust wrap/signs in Kconfig if conventions differ.
-Next actions:
-- Field-test flips at both ends; tune flip_duration/cooldown and beam overlap; finalize log format; optionally expose flip parameters via Kconfig.

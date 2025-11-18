@@ -3,10 +3,10 @@
 
 // Fallback defaults so sources compile even if Kconfig symbols are missing.
 #ifndef CONFIG_GIMBAL_I2C_SDA_GPIO
-#define CONFIG_GIMBAL_I2C_SDA_GPIO 8
+#define CONFIG_GIMBAL_I2C_SDA_GPIO 7
 #endif
 #ifndef CONFIG_GIMBAL_I2C_SCL_GPIO
-#define CONFIG_GIMBAL_I2C_SCL_GPIO 9
+#define CONFIG_GIMBAL_I2C_SCL_GPIO 3
 #endif
 #ifndef CONFIG_GIMBAL_I2C_FREQ_HZ
 #define CONFIG_GIMBAL_I2C_FREQ_HZ 400000

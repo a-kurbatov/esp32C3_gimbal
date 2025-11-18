@@ -1,3 +1,12 @@
+2025-11-18
+- Context: Improve MSP 2-axis yaw behavior using same Kconfig; ensure MSP 0..359 wrap is treated as continuous, calibrate to current heading, and clarify logs with left/right + degrees.
+- Decisions: Implement yaw unwrapping; use unwrapped yaw for all yaw error math; calibrate to unwrapped yaw; keep safety clamps and flip logic; do not change Kconfig.
+- Changes made:
+	- main/main.c: Added yaw unwrap; changed calibration to store unwrapped yaw; updated yaw computations; improved log format.
+	- Verified build; monitor shows new log line with direction and magnitude.
+- Open questions/risks: Confirm servo direction labeling; desired flip duration/cooldown; any preference for log wording.
+- Next actions: Optionally expose flip params via Kconfig; document calibration and MSP wiring/straps in README.
+
 # Copilot Project Journal (append-only)
 
 Purpose: Track decisions, changes, and open items. Append a new dated entry every iteration. Never rewrite past entries.

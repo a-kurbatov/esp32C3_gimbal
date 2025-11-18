@@ -100,14 +100,24 @@ static float s_target_azimuth_deg = 0.0f; // default target: heading 0 maps to s
 static inline float deg2rad(float d) { return d * ((float)M_PI / 180.0f); }
 static inline float rad2deg(float r) { return r * (180.0f / (float)M_PI); }
 static inline float wrap_deg180(float a) { while (a > 180.0f) a -= 360.0f; while (a <= -180.0f) a += 360.0f; return a; }
+static inline float beam_adjust(float e, float beam_half_deg) {
+    float a = fabsf(e);
+    if (a <= beam_half_deg) return 0.0f;
+    return copysignf(a - beam_half_deg, e);
+}
+
+// MSP yaw unwrapping state (0..359..0 -> continuous), file-scope for calibration use
+static float s_yaw_unwrapped_deg = 0.0f;
+static float s_yaw_last_wrapped_deg = 0.0f;
+static bool s_yaw_unwrap_init = false;
 
 static void on_longpress_msp(void *ctx)
 {
-    last_att_t *la = (last_att_t *)ctx;
-    // Capture current heading as new yaw center so servo centers at this yaw
-    s_yaw_center_deg = la->yaw_deg;
+    (void)ctx;
+    // Capture current unwrapped heading as new yaw center so servo centers at this yaw
+    s_yaw_center_deg = s_yaw_unwrapped_deg;
     save_yaw_center_nvs();
-    ESP_LOGI(TAG, "Captured yaw center: %.1f deg", s_yaw_center_deg);
+    ESP_LOGI(TAG, "Captured yaw center: %.1f deg (unwrapped)", s_yaw_center_deg);
     // TODO: persist to NVS for reboot retention
 }
 
@@ -320,7 +330,7 @@ void app_main(void)
     float servo_cmd_deg = 0.0f;                // filtered servo command (deg)
 
     int log_count = 0;
-    const int log_every = (int)(2.0f / dt); // 2 Hz
+    const int log_every = (int)(0.2f / dt); // 5 Hz
     if (log_every < 1) {
         // Fallback to every loop if dt is large
         // (shouldn't happen with 10 Hz)
@@ -339,6 +349,7 @@ void app_main(void)
     // Control parameters (reuse dt, out_alpha, deadband from earlier setup)
     float yaw_cmd_deg = 0.0f, pitch_cmd_deg = 0.0f;
     float yaw_out_deg = 0.0f, pitch_out_deg = 0.0f;
+    // MSP yaw unwrapping state in file-scope variables
     // Settings
     const float servo_half_allowed_deg = CONFIG_GIMBAL_YAW_SERVO_ALLOWED_DEG / 2.0f; // safe servo window
     const float yaw_ratio_servo_per_ant = CONFIG_GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000 / 1000.0f; // servo/ant ratio
@@ -346,8 +357,6 @@ void app_main(void)
     // Antenna limits derived from servo swing and gearing
     float ant_left_lim_deg  = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // positive (left)
     float ant_right_lim_deg = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // positive magnitude
-    if (ant_left_lim_deg > 90.0f)  ant_left_lim_deg = 90.0f;      // keep prior behavior
-    if (ant_right_lim_deg > 270.0f) ant_right_lim_deg = 270.0f;   // keep prior behavior
     // Branch/flip state
     static float branch_offset_deg = 0.0f; // multiples of 360 to shift yaw branch
     static bool  flip_active = false;
@@ -357,8 +366,11 @@ void app_main(void)
     const float flip_duration_s = 1.0f; // 1s per 360°
     const uint32_t flip_T_us = (uint32_t)(flip_duration_s * 1000000.0f);
     const uint32_t flip_cooldown_us = 1500000; // avoid thrash
-    const float flip_start_margin_deg = 0.0f;
-    const float cancel_backoff_deg = 5.0f;
+    // New gating/hysteresis for robust flips at clamp
+    const float flip_servo_margin_deg = 5.0f;   // start flip only within this of servo clamp
+    const float flip_hyst_deg = 10.0f;          // flipped branch must be this much better (antenna deg)
+    const uint32_t flip_dwell_us = 200000;      // must dwell at clamp this long before flip
+    static uint32_t dwell_t0_us = 0;            // dwell start timestamp (0 if not dwelling)
     
 
     while (1) {
@@ -369,70 +381,93 @@ void app_main(void)
             last_att.pitch_deg = att.pitch_deg;
             last_att.roll_deg = att.roll_deg;
 
+            // Unwrap MSP yaw (0..359) into a continuous angle
+            if (!s_yaw_unwrap_init) {
+                s_yaw_unwrapped_deg = att.yaw_deg;
+                s_yaw_last_wrapped_deg = att.yaw_deg;
+                s_yaw_unwrap_init = true;
+            } else {
+                float dy = att.yaw_deg - s_yaw_last_wrapped_deg;
+                if (dy > 180.0f) dy -= 360.0f;
+                if (dy < -180.0f) dy += 360.0f;
+                s_yaw_unwrapped_deg += dy;
+                s_yaw_last_wrapped_deg = att.yaw_deg;
+            }
+
             // Animate ongoing flip toward target branch, if any
             uint32_t now_us2 = (uint32_t)esp_timer_get_time();
             if (flip_active) {
                 float t = (now_us2 - flip_t0_us) / (float)flip_T_us;
-                if (t >= 1.0f) { branch_offset_deg = flip_target_deg; flip_active = false; }
+                if (t >= 1.0f) {
+                    branch_offset_deg = flip_target_deg;
+                    // Normalize to nearest multiple of 360 to avoid drift
+                    branch_offset_deg = 360.0f * roundf(branch_offset_deg / 360.0f);
+                    flip_active = false;
+                }
                 else { branch_offset_deg = flip_start_deg + (flip_target_deg - flip_start_deg) * t; }
             }
 
-            // Base antenna yaw error (deg). MSP yaw loops 0..359; shift by calibration and branch offset.
-            // Default calibration: forward = 0° at boot; long-press sets forward = current heading.
-            float e_ant = s_yaw_center_deg - att.yaw_deg + branch_offset_deg; // + => turn left
-            e_ant = wrap_deg180(e_ant);
+            // Base error on current branch
+            float e_base = s_yaw_center_deg - s_yaw_unwrapped_deg + branch_offset_deg; // + => turn left
 
-            // Beam overlap smoothing
-            float e_ant_eff = e_ant;
-            if (fabsf(e_ant_eff) <= beam_half_deg) e_ant_eff = 0.0f; else e_ant_eff = copysignf(fabsf(e_ant_eff) - beam_half_deg, e_ant_eff);
+            // Compute candidate commands for 3 branches: keep, flip -360, flip +360
+            float e_keep_dec = beam_adjust(e_base, beam_half_deg);
+            float e_m360_dec = beam_adjust(e_base - 360.0f, beam_half_deg);
+            float e_p360_dec = beam_adjust(e_base + 360.0f, beam_half_deg);
+            float e_keep_cmd = e_keep_dec;
+            float e_m360_cmd = e_m360_dec;
+            float e_p360_cmd = e_p360_dec;
+            if (e_keep_cmd >  ant_left_lim_deg)  e_keep_cmd =  ant_left_lim_deg;
+            if (e_keep_cmd < -ant_right_lim_deg) e_keep_cmd = -ant_right_lim_deg;
+            if (e_m360_cmd >  ant_left_lim_deg)  e_m360_cmd =  ant_left_lim_deg;
+            if (e_m360_cmd < -ant_right_lim_deg) e_m360_cmd = -ant_right_lim_deg;
+            if (e_p360_cmd >  ant_left_lim_deg)  e_p360_cmd =  ant_left_lim_deg;
+            if (e_p360_cmd < -ant_right_lim_deg) e_p360_cmd = -ant_right_lim_deg;
 
-            // Current-branch clamped command
-            float e_keep = e_ant_eff;
-            if (e_keep >  ant_left_lim_deg)  e_keep =  ant_left_lim_deg;
-            if (e_keep < -ant_right_lim_deg) e_keep = -ant_right_lim_deg;
+            // Determine clamp proximity in servo space for KEEP branch
+            float yaw_servo_keep = e_keep_cmd * yaw_ratio_servo_per_ant;
+            if (yaw_servo_keep > servo_half_allowed_deg) yaw_servo_keep = servo_half_allowed_deg;
+            if (yaw_servo_keep < -servo_half_allowed_deg) yaw_servo_keep = -servo_half_allowed_deg;
+            bool at_servo_clamp = fabsf(yaw_servo_keep) >= (servo_half_allowed_deg - flip_servo_margin_deg);
 
-            // Are we beyond limit + half-beam?
-            bool at_left_plus  = (e_ant >  ant_left_lim_deg + (beam_half_deg + flip_start_margin_deg));
-            bool at_right_plus = (e_ant < -ant_right_lim_deg - (beam_half_deg + flip_start_margin_deg));
+            // Decide if flipped branch is significantly better (decision space, unclamped, antenna deg)
+            float best_dec_flip = 0.0f; // store which flip is better
+            float better_dec_mag = fabsf(e_keep_dec);
+            bool flip_better = false;
+            float desired_branch = branch_offset_deg;
+            if (fabsf(e_m360_dec) + flip_hyst_deg < better_dec_mag) { flip_better = true; better_dec_mag = fabsf(e_m360_dec); best_dec_flip = -360.0f; desired_branch = branch_offset_deg - 360.0f; }
+            if (fabsf(e_p360_dec) + flip_hyst_deg < better_dec_mag) { flip_better = true; better_dec_mag = fabsf(e_p360_dec); best_dec_flip = +360.0f; desired_branch = branch_offset_deg + 360.0f; }
 
-            // Evaluate flipped branch benefit
-            float e_flip = e_ant + (at_left_plus ? -360.0f : (at_right_plus ? +360.0f : 0.0f));
-            e_flip = wrap_deg180(e_flip);
-            if (fabsf(e_flip) <= beam_half_deg) e_flip = 0.0f; else e_flip = copysignf(fabsf(e_flip) - beam_half_deg, e_flip);
-            if (e_flip >  ant_left_lim_deg)  e_flip =  ant_left_lim_deg;
-            if (e_flip < -ant_right_lim_deg) e_flip = -ant_right_lim_deg;
-
-            if (!flip_active && (at_left_plus || at_right_plus) && (now_us2 - last_flip_us) > flip_cooldown_us) {
-                if (fabsf(e_flip) + 1e-3f < fabsf(e_keep)) {
-                    flip_start_deg = branch_offset_deg;
-                    flip_target_deg = branch_offset_deg + (at_left_plus ? -360.0f : +360.0f);
-                    flip_t0_us = now_us2;
-                    flip_active = true;
-                    last_flip_us = now_us2;
-                }
+            // Dwell detection at clamp
+            if (at_servo_clamp && flip_better) {
+                if (dwell_t0_us == 0) dwell_t0_us = now_us2;
+            } else {
+                dwell_t0_us = 0;
             }
 
-            // Optional cancel if backing away or no longer helpful
+            // Start flip only when at clamp, flipped branch better by hysteresis, and dwell elapsed
+            if (!flip_active && at_servo_clamp && flip_better && dwell_t0_us != 0 && (now_us2 - dwell_t0_us) >= flip_dwell_us && (now_us2 - last_flip_us) > flip_cooldown_us) {
+                flip_start_deg = branch_offset_deg;
+                flip_target_deg = desired_branch;
+                flip_t0_us = now_us2;
+                flip_active = true;
+                last_flip_us = now_us2;
+                ESP_LOGI(TAG, "flip start: %s e_keep=%.1f e_flip=%.1f branch=%.1f->%.1f",
+                         (best_dec_flip > 0) ? "to right" : "to left", e_keep_dec,
+                         (best_dec_flip > 0 ? e_p360_dec : e_m360_dec), flip_start_deg, flip_target_deg);
+            }
+
+            // Choose branch for actuation: keep by default; during flip, command destination branch using flip_target directly
+            float act_cmd = e_keep_cmd;
+            const char *branch_lbl = "keep";
             if (flip_active) {
-                bool flipping_right = (flip_target_deg - flip_start_deg) > 0;
-                float cur_flip_err = s_yaw_center_deg - att.yaw_deg + branch_offset_deg + (flipping_right ? +360.0f : -360.0f);
-                cur_flip_err = wrap_deg180(cur_flip_err);
-                if (fabsf(cur_flip_err) <= beam_half_deg) cur_flip_err = 0.0f; else cur_flip_err = copysignf(fabsf(cur_flip_err) - beam_half_deg, cur_flip_err);
-                if (cur_flip_err >  ant_left_lim_deg)  cur_flip_err =  ant_left_lim_deg;
-                if (cur_flip_err < -ant_right_lim_deg) cur_flip_err = -ant_right_lim_deg;
-                bool backing_off = (!at_left_plus && !at_right_plus) || (fabsf(e_ant) < (fabsf(e_keep) - cancel_backoff_deg));
-                if (backing_off || !(fabsf(cur_flip_err) + 1e-3f < fabsf(e_keep))) {
-                    flip_active = false;
-                }
+                float e_dest_dec = beam_adjust(s_yaw_center_deg - s_yaw_unwrapped_deg + flip_target_deg, beam_half_deg);
+                if (e_dest_dec >  ant_left_lim_deg)  e_dest_dec =  ant_left_lim_deg;
+                if (e_dest_dec < -ant_right_lim_deg) e_dest_dec = -ant_right_lim_deg;
+                act_cmd = e_dest_dec;
+                branch_lbl = (flip_target_deg > branch_offset_deg) ? "+360" : "-360";
             }
-
-            // Final yaw command on current branch
-            float e_final = s_yaw_center_deg - att.yaw_deg + branch_offset_deg;
-            e_final = wrap_deg180(e_final);
-            if (fabsf(e_final) <= beam_half_deg) e_final = 0.0f; else e_final = copysignf(fabsf(e_final) - beam_half_deg, e_final);
-            if (e_final >  ant_left_lim_deg)  e_final =  ant_left_lim_deg;
-            if (e_final < -ant_right_lim_deg) e_final = -ant_right_lim_deg;
-            yaw_cmd_deg = e_final;
+            yaw_cmd_deg = act_cmd;
 
             // - Pitch command holds horizon (0 deg) with yaw-dependent gain
             //   When |yaw_cmd| ~ 90 deg, reduce pitch authority (cos goes to 0)
@@ -467,9 +502,9 @@ void app_main(void)
                 log_count = 0;
                 const char *servo_dir = (yaw_servo >= 0.0f) ? "left" : "right";
                 float servo_mag = fabsf(yaw_servo);
-                ESP_LOGI(TAG, "imu_msp: raw ints r=%d p=%d y=%d; gimbal_rel: pitch=%.1f yaw=%.1f servo=%+.0f (%s %.0f) lim=±%.0f",
+                ESP_LOGI(TAG, "imu_msp: raw ints r=%d p=%d y=%d; gimbal_rel: pitch=%.1f yaw=%.1f branch=%s servo=%+.0f (%s %.0f deg) lim=±%.0f",
                          (int)att.raw_roll_i16, (int)att.raw_pitch_i16, (int)att.raw_yaw_i16,
-                         pitch_out_deg, yaw_out_deg, yaw_servo, servo_dir, servo_mag, servo_half_allowed_deg);
+                         pitch_out_deg, yaw_out_deg, branch_lbl, yaw_servo, servo_dir, servo_mag, servo_half_allowed_deg);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(loop_delay_ms));
