@@ -71,3 +71,47 @@ Open questions / risks:
 - Servo mechanics per axis (min/max/ratio/limits) still TODO; using shared limits for now.
 Next actions:
 - Persist target azimuth to NVS; add Kconfig for signs, gains, deadband/smoothing; refactor dual-servo driver; improve MSP robustness.
+
+Date: 2025-11-13
+Context:
+- MSP bring-up refinements: removed consuming RX sniff/echo drains to prevent header loss; added UART RX flush at init; optional buffered RX debug; throttled raw logs.
+Decisions:
+- Keep poll rate; reduce monitor noise; prefer non-consuming diagnostics.
+Changes made:
+- imu_msp.c: removed echo drain; switched to uart_get_buffered_data_len when debug enabled; added uart_flush_input at init.
+Open questions / risks:
+- If FC enforces MSPv2 only, add v2 parsing later.
+Next actions:
+- Validate sustained MSP updates and tune read timeouts if needed.
+
+Date: 2025-11-14
+Context:
+- Yaw heading interpretation clarified: yaw is 0..359 deg (heading at boot), not 0.1°.
+- Added persistent raw ATT debug (throttled to ~2 Hz) and 2 Hz main log: raw ints + gimbal_rel.
+Decisions:
+- Use yaw directly in degrees; roll/pitch remain deci-deg (÷10).
+Changes made:
+- imu_msp.c: yaw scaling changed to use raw degrees; raw ATT logs include ints and deg; main log prints "imu_msp: raw ints r=.. p=.. y=..; gimbal_rel: pitch=.. yaw=.." at 2 Hz.
+Open questions / risks:
+- None blocking.
+Next actions:
+- Proceed to yaw control logic improvements.
+
+Date: 2025-11-17
+Context:
+- Reworked MSP yaw control to be servo-centric and robust at 0/359 seam.
+- Added calibration of yaw center (long-press); stored in NVS; loaded on boot.
+- Added Kconfig for yaw mapping: total yaw servo travel, yaw gearing (servo/antenna), antenna opening.
+- Implemented unwrapped nearest-branch selection, 1 s phase flip animation with 1.5 s cooldown and near-limit hysteresis; antenna overlap smooth deadband.
+Decisions:
+- Center the mapping on servo center; always pick the branch that keeps servo within half-swing; only flip when sustained near the limit.
+Changes made:
+- Kconfig: GIMBAL_YAW_SERVO_MAX_DEG, GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000, GIMBAL_ANTENNA_OPENING_DEG.
+- main.c (MSP path): base error uses yaw_center; apply smooth deadband; compute servo_cmd via yaw_ratio; clamp to half-swing; pick e0±360 branch closest to previous command; flip animation when needed; yaw-dependent pitch gain retained (cos(|yaw_cmd|)).
+- NVS: new key yaw_ctr; load/save helpers; long-press captures yaw center.
+Build fixes:
+- Included esp_timer.h; removed duplicate beam_half_deg and stray state from UART-RVC block.
+Open questions / risks:
+- Optional asymmetry (e.g., right 270, left 90) can be reintroduced via config; current servo-centric default is symmetric limits from half-swing.
+Next actions:
+- Optionally expose flip timing/cooldown/hysteresis in Kconfig; allow asymmetric left/right limits; tune yaw->pitch taper curve; document yaw calibration in README.

@@ -21,10 +21,14 @@ static const char *TAG = "imu_msp";
 
 static TaskHandle_t s_task = NULL;
 static int s_uart = -1;
+static volatile int16_t s_roll_i16 = 0;
+static volatile int16_t s_pitch_i16 = 0;
+static volatile int16_t s_yaw_i16 = 0;
 static volatile float s_roll_deg = 0.0f;
 static volatile float s_pitch_deg = 0.0f;
 static volatile float s_yaw_deg = 0.0f;
 static volatile uint32_t s_last_us = 0;
+static volatile uint32_t s_last_dbg_us = 0; // throttle raw debug to ~2 Hz
 
 static uint8_t msp_checksum_v1(const uint8_t *buf, int len)
 {
@@ -32,6 +36,7 @@ static uint8_t msp_checksum_v1(const uint8_t *buf, int len)
     for (int i = 0; i < len; ++i) cs ^= buf[i];
     return cs;
 }
+
 
 static esp_err_t msp_send_req(uint8_t cmd)
 {
@@ -73,8 +78,18 @@ static bool msp_read_frame(uint8_t expected_cmd, uint8_t *payload, int *out_size
         t_rem -= 5;
     }
     if (t_rem < 0) return false;
-    // Expect 'M'
-    if (uart_read_exact(&b, 1, t_rem) != 1 || b != MSP_V1_HDR2) return false;
+    // Expect 'M' (v1) or detect 'X' (v2)
+    if (uart_read_exact(&b, 1, t_rem) != 1) return false;
+    if (b != MSP_V1_HDR2) {
+        if (b == 'X') {
+            static bool logged_v2 = false;
+            if (!logged_v2) {
+                ESP_LOGW(TAG, "MSP v2 header detected ('$X'); v2 parsing not implemented yet");
+                logged_v2 = true;
+            }
+        }
+        return false;
+    }
     // Expect '>'
     if (uart_read_exact(&b, 1, t_rem) != 1 || b != MSP_V1_DIR_FROMFC) return false;
     // size, cmd
@@ -110,18 +125,52 @@ static void msp_task(void *arg)
     const int poll_hz = 50; // adjustable later via Kconfig if needed
     const int poll_ms = 1000 / poll_hz;
     uint8_t payload[16];
+    uint32_t last_log_us = 0;
+    uint8_t sniff[64];
     while (1) {
-        (void)msp_send_req(MSP_ATTITUDE);
+    // Try MSPv1 request for ATTITUDE
+    (void)msp_send_req(MSP_ATTITUDE);
+    // Ensure TX completes promptly before reading
+    uart_wait_tx_done(s_uart, pdMS_TO_TICKS(20));
         int size = 0;
-        if (msp_read_frame(MSP_ATTITUDE, payload, &size, 50)) {
+        if (msp_read_frame(MSP_ATTITUDE, payload, &size, 200)) {
             if (size >= 6) {
                 int16_t roll = (int16_t)(payload[0] | (payload[1] << 8));
                 int16_t pitch = (int16_t)(payload[2] | (payload[3] << 8));
                 int16_t yaw = (int16_t)(payload[4] | (payload[5] << 8));
+                s_roll_i16 = roll;
+                s_pitch_i16 = pitch;
+                s_yaw_i16 = yaw;
+                // Optional detailed raw logging at ~2 Hz (debug only)
+#if CONFIG_GIMBAL_MSP_DEBUG_RX
+                uint32_t now_us = (uint32_t)esp_timer_get_time();
+                if (now_us - s_last_dbg_us > 500000) {
+                    char hex[3*6 + 1];
+                    int idx = 0;
+                    for (int i = 0; i < 6; ++i) idx += snprintf(hex + idx, sizeof(hex) - idx, "%02X ", payload[i]);
+                    hex[(idx>0)?idx-1:0] = '\0';
+                    ESP_LOGI(TAG, "MSP ATT raw: size=%d bytes=[%s] ints r=%d p=%d y=%d deg r=%.1f p=%.1f y=%.0f",
+                             size, hex, roll, pitch, yaw, roll/10.0f, pitch/10.0f, (float)yaw);
+                    s_last_dbg_us = now_us;
+                }
+#endif
                 s_roll_deg = roll / 10.0f;
                 s_pitch_deg = pitch / 10.0f;
-                s_yaw_deg = yaw / 10.0f;
+                s_yaw_deg = (float)yaw; // heading 0..359 deg
                 s_last_us = (uint32_t)esp_timer_get_time();
+            }
+        } else {
+            uint32_t now = (uint32_t)esp_timer_get_time();
+            // Optional: report buffered RX count without consuming bytes
+#if CONFIG_GIMBAL_MSP_DEBUG_RX
+            size_t buffered = 0;
+            if (uart_get_buffered_data_len(s_uart, &buffered) == ESP_OK && buffered > 0) {
+                ESP_LOGI(TAG, "RX buffered: %u bytes", (unsigned)buffered);
+            }
+#endif
+            if (s_last_us == 0 && (now - last_log_us) > 1000000) {
+                ESP_LOGW(TAG, "No MSP_ATTITUDE response; ensure MSP is enabled on selected FC UART at %d baud and wiring TX->RX, RX->TX (3.3V)", CONFIG_GIMBAL_MSP_UART_BAUD);
+                last_log_us = now;
             }
         }
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
@@ -144,6 +193,8 @@ esp_err_t imu_msp_init(void)
     ESP_ERROR_CHECK(uart_param_config(s_uart, &ucfg));
     int tx_io = (CONFIG_GIMBAL_MSP_UART_TX_GPIO < 0) ? UART_PIN_NO_CHANGE : CONFIG_GIMBAL_MSP_UART_TX_GPIO;
     ESP_ERROR_CHECK(uart_set_pin(s_uart, tx_io, CONFIG_GIMBAL_MSP_UART_RX_GPIO, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // Flush any garbage at startup to start clean
+    uart_flush_input(s_uart);
     xTaskCreate(msp_task, "msp_poll", 3072, NULL, 4, &s_task);
     ESP_LOGI(TAG, "MSP UART%d RX=%d TX=%d baud=%d", s_uart, CONFIG_GIMBAL_MSP_UART_RX_GPIO, CONFIG_GIMBAL_MSP_UART_TX_GPIO, CONFIG_GIMBAL_MSP_UART_BAUD);
     return ESP_OK;
@@ -157,6 +208,9 @@ esp_err_t imu_msp_read(msp_att_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
     uint32_t now = (uint32_t)esp_timer_get_time();
+    out->raw_roll_i16 = s_roll_i16;
+    out->raw_pitch_i16 = s_pitch_i16;
+    out->raw_yaw_i16 = s_yaw_i16;
     out->roll_deg = s_roll_deg;
     out->pitch_deg = s_pitch_deg;
     out->yaw_deg = s_yaw_deg;

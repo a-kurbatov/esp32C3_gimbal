@@ -1,0 +1,34 @@
+Request Data via MSP: From the microcontroller, send periodic MSP requests. MSP format: $M< [payload size] [command code] [payload] [checksum].
+For attitude (recommended for gimbal—gives processed roll/pitch/heading in 1/10 degrees): Command 108 (MSP_ATTITUDE). Request: $M< 0 108 [checksum]. Response: 6 bytes (roll int16, pitch int16, heading uint16).
+For raw IMU (accel/gyro/mag vectors): Command 102 (MSP_RAW_IMU). Request: $M< 0 102 [checksum]. Response: 18 bytes (accel x/y/z int16, gyro x/y/z int16, mag x/y/z int16).
+Checksum: XOR of size + command + payload.
+Poll at 50-100Hz for real-time control.
+
+Process and Control: On the microcontroller:
+Parse the response.
+Use user-set values (e.g., from RC AUX channels or app) for target azimuth/pitch.
+Compute corrections based on drone attitude.
+Output PWM to servos (e.g., via Arduino Servo library) or serial to a gimbal board (e.g., Storm32 supports external attitude input via MAVLink/MSP).
+Example Arduino sketch outline (adapt as needed):text#include <SoftwareSerial.h>
+SoftwareSerial mspSerial(10, 11); // RX, TX
+
+void setup() {
+  mspSerial.begin(115200);
+}
+
+void loop() {
+  // Request MSP_ATTITUDE
+  uint8_t request[] = {0x24, 0x4D, 0x3C, 0x00, 0x6C, 0x6C}; // $M< 0 108 checksum
+  mspSerial.write(request, 6);
+
+  // Read response (header $M> size cmd payload checksum)
+  if (mspSerial.available() >= 9) { // Header(3) + size(1) + cmd(1) + payload(6) + checksum(1)
+    // Parse roll, pitch, heading from payload
+    int16_t roll = (mspSerial.read() << 8) | mspSerial.read();
+    int16_t pitch = (mspSerial.read() << 8) | mspSerial.read();
+    uint16_t heading = (mspSerial.read() << 8) | mspSerial.read();
+    // Compute gimbal corrections and drive servos
+  }
+  delay(10); // Adjust for rate
+}
+Note: Handle timeouts, errors, and scaling (e.g., attitude in 1/10 deg; convert to servo microseconds).

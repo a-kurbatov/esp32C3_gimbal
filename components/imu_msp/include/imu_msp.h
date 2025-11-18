@@ -7,6 +7,10 @@ extern "C" {
 #endif
 
 typedef struct {
+    // Raw MSP ATTITUDE int16 values (units per FC; typically 0.1 deg)
+    int16_t raw_roll_i16;
+    int16_t raw_pitch_i16;
+    int16_t raw_yaw_i16;
     float roll_deg;
     float pitch_deg;
     float yaw_deg;

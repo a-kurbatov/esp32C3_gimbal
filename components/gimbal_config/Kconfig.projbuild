@@ -232,6 +232,40 @@ config GIMBAL_SERVO_YAW_GPIO
     int "Yaw Servo PWM GPIO"
     default 8
 
+config GIMBAL_MSP_DEBUG_RX
+    bool "Verbose MSP RX sniff logs (debug)"
+    help
+        When enabled, logs raw bytes received on the MSP UART to aid bring-up.
+        Disable for normal operation to reduce log noise.
+    default n
+
 comment "TODO: Add per-axis mechanics and ranges (min/max us, ratio, limits)"
+
+endmenu
+
+menu "Yaw servo mapping (servo-centric)"
+    depends on GIMBAL_IMU_SELECT_MSP_2AXIS
+
+config GIMBAL_YAW_SERVO_MAX_DEG
+    int "Yaw servo total travel (deg)"
+    help
+        Total servo travel used for yaw axis mapping. Half-swing is half of this value.
+    range 60 360
+    default 180
+
+config GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000
+    int "Yaw gearing: servo deg per antenna deg x1000"
+    help
+        Set to 333 for 1:3 gearing (0.333 servo deg per antenna deg). Higher values mean more servo
+        movement per antenna degree.
+    range 1 10000
+    default 333
+
+config GIMBAL_ANTENNA_OPENING_DEG
+    int "Antenna horizontal opening (deg)"
+    help
+        Horizontal 3 dB beamwidth (approx). Controller will not rotate when the error is inside half of this value.
+    range 0 120
+    default 10
 
 endmenu
