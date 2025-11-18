@@ -339,20 +339,26 @@ void app_main(void)
     // Control parameters (reuse dt, out_alpha, deadband from earlier setup)
     float yaw_cmd_deg = 0.0f, pitch_cmd_deg = 0.0f;
     float yaw_out_deg = 0.0f, pitch_out_deg = 0.0f;
-    // Wrap/flip state and limits
-    static float prev_gimbal_yaw_cmd = 0.0f;     // deg (pre-smoothing)
-    const float servo_half_allowed_deg = CONFIG_GIMBAL_YAW_SERVO_ALLOWED_DEG / 2.0f; // enforce safe window
-    const float yaw_ratio_servo_per_ant = CONFIG_GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000 / 1000.0f;
-    const float beam_half_deg = CONFIG_GIMBAL_ANTENNA_OPENING_DEG / 2.0f;
-    static float phase_deg = 0.0f;               // multiples of 360 applied for wrap branch
-    static bool phase_anim = false;
-    static float phase_from = 0.0f, phase_to = 0.0f;
-    static uint32_t phase_t0_us = 0;
+    // Settings
+    const float servo_half_allowed_deg = CONFIG_GIMBAL_YAW_SERVO_ALLOWED_DEG / 2.0f; // safe servo window
+    const float yaw_ratio_servo_per_ant = CONFIG_GIMBAL_YAW_RATIO_SERVO_PER_ANT_X1000 / 1000.0f; // servo/ant ratio
+    const float beam_half_deg = CONFIG_GIMBAL_ANTENNA_OPENING_DEG / 2.0f; // deg
+    // Antenna limits derived from servo swing and gearing
+    float ant_left_lim_deg  = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // positive (left)
+    float ant_right_lim_deg = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // positive magnitude
+    if (ant_left_lim_deg > 90.0f)  ant_left_lim_deg = 90.0f;      // keep prior behavior
+    if (ant_right_lim_deg > 270.0f) ant_right_lim_deg = 270.0f;   // keep prior behavior
+    // Branch/flip state
+    static float branch_offset_deg = 0.0f; // multiples of 360 to shift yaw branch
+    static bool  flip_active = false;
+    static float flip_start_deg = 0.0f, flip_target_deg = 0.0f;
+    static uint32_t flip_t0_us = 0;
     static uint32_t last_flip_us = 0;
-    static int near_limit_count = 0;
-    const uint32_t phase_T_us = 1000000;         // 1 second full rotate to "other side"
-    const uint32_t flip_cooldown_us = 1500000;   // 1.5s cooldown between flips (avoid thrash)
-    const int near_limit_required = 5;           // require consecutive detections before flip
+    const float flip_duration_s = 1.0f; // 1s per 360°
+    const uint32_t flip_T_us = (uint32_t)(flip_duration_s * 1000000.0f);
+    const uint32_t flip_cooldown_us = 1500000; // avoid thrash
+    const float flip_start_margin_deg = 0.0f;
+    const float cancel_backoff_deg = 5.0f;
     
 
     while (1) {
@@ -363,65 +369,69 @@ void app_main(void)
             last_att.pitch_deg = att.pitch_deg;
             last_att.roll_deg = att.roll_deg;
 
-            // Simpler controller:
-            // Animate phase (±360) if we decide to flip to the other branch
+            // Animate ongoing flip toward target branch, if any
             uint32_t now_us2 = (uint32_t)esp_timer_get_time();
-            if (phase_anim) {
-                float t = (now_us2 - phase_t0_us) / (float)phase_T_us;
-                if (t >= 1.0f) { phase_deg = phase_to; phase_anim = false; }
-                else { phase_deg = phase_from + (phase_to - phase_from) * t; }
+            if (flip_active) {
+                float t = (now_us2 - flip_t0_us) / (float)flip_T_us;
+                if (t >= 1.0f) { branch_offset_deg = flip_target_deg; flip_active = false; }
+                else { branch_offset_deg = flip_start_deg + (flip_target_deg - flip_start_deg) * t; }
             }
 
-            // Base yaw error (front target): heading 0 = servo center (UNWRAPPED)
-            // Choose among e0, e0±360 the one closest to previous command for continuity.
-            float e0 = s_yaw_center_deg - att.yaw_deg + phase_deg;
-            float e_cand = e0;
-            float e_p = e0 + 360.0f;
-            float e_m = e0 - 360.0f;
-            if (fabsf(e_p - prev_gimbal_yaw_cmd) < fabsf(e_cand - prev_gimbal_yaw_cmd)) e_cand = e_p;
-            if (fabsf(e_m - prev_gimbal_yaw_cmd) < fabsf(e_cand - prev_gimbal_yaw_cmd)) e_cand = e_m;
+            // Base antenna yaw error (deg). MSP yaw loops 0..359; shift by calibration and branch offset.
+            // Default calibration: forward = 0° at boot; long-press sets forward = current heading.
+            float e_ant = s_yaw_center_deg - att.yaw_deg + branch_offset_deg; // + => turn left
+            e_ant = wrap_deg180(e_ant);
 
-            // Apply antenna beam overlap: allow ±beam_half_deg without rotating (smooth deadband)
-            float e_eff = e_cand;
-            if (fabsf(e_eff) <= beam_half_deg) e_eff = 0.0f; else e_eff = copysignf(fabsf(e_eff) - beam_half_deg, e_eff);
+            // Beam overlap smoothing
+            float e_ant_eff = e_ant;
+            if (fabsf(e_ant_eff) <= beam_half_deg) e_ant_eff = 0.0f; else e_ant_eff = copysignf(fabsf(e_ant_eff) - beam_half_deg, e_ant_eff);
 
-            // Directional gimbal yaw limits based on servo swing and yaw gearing
-            float gimbal_left_limit  = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // e > 0 (left)
-            float gimbal_right_limit = servo_half_allowed_deg / yaw_ratio_servo_per_ant;  // e < 0 (right)
-            // Asymmetric range per request: left up to +90, right up to -270 (subject to servo swing)
-            if (gimbal_left_limit  > 90.0f)  gimbal_left_limit  = 90.0f;
-            if (gimbal_right_limit > 270.0f) gimbal_right_limit = 270.0f;
+            // Current-branch clamped command
+            float e_keep = e_ant_eff;
+            if (e_keep >  ant_left_lim_deg)  e_keep =  ant_left_lim_deg;
+            if (e_keep < -ant_right_lim_deg) e_keep = -ant_right_lim_deg;
 
-            // If near limits (after overlap deadband), plan a flip by adding/subtracting 360 to phase and animate over 1s
-            float margin = 2.0f; // deg slack before triggering flip
-            bool near_limit = (e_eff > gimbal_left_limit - margin || e_eff < -gimbal_right_limit + margin);
-            if (!phase_anim && near_limit) {
-                near_limit_count++;
-            } else {
-                near_limit_count = 0;
+            // Are we beyond limit + half-beam?
+            bool at_left_plus  = (e_ant >  ant_left_lim_deg + (beam_half_deg + flip_start_margin_deg));
+            bool at_right_plus = (e_ant < -ant_right_lim_deg - (beam_half_deg + flip_start_margin_deg));
+
+            // Evaluate flipped branch benefit
+            float e_flip = e_ant + (at_left_plus ? -360.0f : (at_right_plus ? +360.0f : 0.0f));
+            e_flip = wrap_deg180(e_flip);
+            if (fabsf(e_flip) <= beam_half_deg) e_flip = 0.0f; else e_flip = copysignf(fabsf(e_flip) - beam_half_deg, e_flip);
+            if (e_flip >  ant_left_lim_deg)  e_flip =  ant_left_lim_deg;
+            if (e_flip < -ant_right_lim_deg) e_flip = -ant_right_lim_deg;
+
+            if (!flip_active && (at_left_plus || at_right_plus) && (now_us2 - last_flip_us) > flip_cooldown_us) {
+                if (fabsf(e_flip) + 1e-3f < fabsf(e_keep)) {
+                    flip_start_deg = branch_offset_deg;
+                    flip_target_deg = branch_offset_deg + (at_left_plus ? -360.0f : +360.0f);
+                    flip_t0_us = now_us2;
+                    flip_active = true;
+                    last_flip_us = now_us2;
+                }
             }
-            if (!phase_anim && near_limit_count >= near_limit_required &&
-                (now_us2 - last_flip_us) > flip_cooldown_us) {
-                phase_from = phase_deg;
-                // If we are near left limit (e>0), subtract 360 to flip; near right limit (e<0), add 360.
-                phase_to = phase_deg + ((e_cand > 0) ? -360.0f : 360.0f);
-                phase_t0_us = now_us2;
-                phase_anim = true;
-                last_flip_us = now_us2;
-                near_limit_count = 0;
+
+            // Optional cancel if backing away or no longer helpful
+            if (flip_active) {
+                bool flipping_right = (flip_target_deg - flip_start_deg) > 0;
+                float cur_flip_err = s_yaw_center_deg - att.yaw_deg + branch_offset_deg + (flipping_right ? +360.0f : -360.0f);
+                cur_flip_err = wrap_deg180(cur_flip_err);
+                if (fabsf(cur_flip_err) <= beam_half_deg) cur_flip_err = 0.0f; else cur_flip_err = copysignf(fabsf(cur_flip_err) - beam_half_deg, cur_flip_err);
+                if (cur_flip_err >  ant_left_lim_deg)  cur_flip_err =  ant_left_lim_deg;
+                if (cur_flip_err < -ant_right_lim_deg) cur_flip_err = -ant_right_lim_deg;
+                bool backing_off = (!at_left_plus && !at_right_plus) || (fabsf(e_ant) < (fabsf(e_keep) - cancel_backoff_deg));
+                if (backing_off || !(fabsf(cur_flip_err) + 1e-3f < fabsf(e_keep))) {
+                    flip_active = false;
+                }
             }
-            // Recompute with (possibly) updated phase, without wrap
-            e0 = s_target_azimuth_deg - att.yaw_deg + phase_deg;
-            // pick nearest branch again
-            e_cand = e0; e_p = e0 + 360.0f; e_m = e0 - 360.0f;
-            if (fabsf(e_p - prev_gimbal_yaw_cmd) < fabsf(e_cand - prev_gimbal_yaw_cmd)) e_cand = e_p;
-            if (fabsf(e_m - prev_gimbal_yaw_cmd) < fabsf(e_cand - prev_gimbal_yaw_cmd)) e_cand = e_m;
-            // overlap
-            float e_final = e_cand;
+
+            // Final yaw command on current branch
+            float e_final = s_yaw_center_deg - att.yaw_deg + branch_offset_deg;
+            e_final = wrap_deg180(e_final);
             if (fabsf(e_final) <= beam_half_deg) e_final = 0.0f; else e_final = copysignf(fabsf(e_final) - beam_half_deg, e_final);
-            // clamp to asymmetric limits
-            if (e_final > gimbal_left_limit)  e_final = gimbal_left_limit;
-            if (e_final < -gimbal_right_limit) e_final = -gimbal_right_limit;
+            if (e_final >  ant_left_lim_deg)  e_final =  ant_left_lim_deg;
+            if (e_final < -ant_right_lim_deg) e_final = -ant_right_lim_deg;
             yaw_cmd_deg = e_final;
 
             // - Pitch command holds horizon (0 deg) with yaw-dependent gain
@@ -437,7 +447,7 @@ void app_main(void)
             // Smooth outputs
             yaw_out_deg = out_alpha * yaw_out_deg + (1.0f - out_alpha) * yaw_cmd_deg;
             pitch_out_deg = out_alpha * pitch_out_deg + (1.0f - out_alpha) * pitch_cmd_deg;
-            prev_gimbal_yaw_cmd = yaw_cmd_deg;
+            // no branch bias memory
 
             // Map to servo angles via mechanical ratio and clamp to servo limits
             float ratio = CONFIG_GIMBAL_MECH_RATIO / 1000.0f; // pitch ratio (servo per antenna)
@@ -455,10 +465,11 @@ void app_main(void)
 
             if (++log_count >= log_every) {
                 log_count = 0;
-                // Requested 2Hz format: imu_msp raw ints + gimbal relative
-                ESP_LOGI(TAG, "imu_msp: raw ints r=%d p=%d y=%d; gimbal_rel: pitch=%.1f yaw=%.1f",
+                const char *servo_dir = (yaw_servo >= 0.0f) ? "left" : "right";
+                float servo_mag = fabsf(yaw_servo);
+                ESP_LOGI(TAG, "imu_msp: raw ints r=%d p=%d y=%d; gimbal_rel: pitch=%.1f yaw=%.1f servo=%+.0f (%s %.0f) lim=±%.0f",
                          (int)att.raw_roll_i16, (int)att.raw_pitch_i16, (int)att.raw_yaw_i16,
-                         pitch_out_deg, yaw_out_deg);
+                         pitch_out_deg, yaw_out_deg, yaw_servo, servo_dir, servo_mag, servo_half_allowed_deg);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(loop_delay_ms));

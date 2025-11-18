@@ -128,3 +128,19 @@ Open questions / risks:
 - Consider asymmetric allowed windows per direction if needed (e.g., +larger to right, smaller to left).
 Next actions:
 - Expose flip timing/cooldown/hysteresis in Kconfig; optionally add asymmetric yaw limits; update README with safety guidance and calibration steps.
+
+Date: 2025-11-18
+Context:
+- Rewrote MSP yaw logic from scratch to use a simple 0..359° heading loop with calibration-based forward, continuous optimal-vector computation, and bounded flip animation only when beyond limit + half beam.
+- Added explicit servo-direction logging to the 2 Hz line to show left/right and magnitude with limits.
+Decisions:
+- Keep existing Kconfig settings (allowed servo angle, yaw ratio, antenna opening) and reuse pitch path; center servo at boot and treat MSP 0° as default forward.
+- Start transitions only when they reduce antenna error considering beam overlap; cap flip speed to ~1 s per 360° with cooldown; cancel if operator backs off.
+Changes made:
+- main.c (MSP section): removed nearest-branch heuristics and phase_* state; added branch_offset_deg with flip_active animation; limit checks use antenna-side limits derived from servo allowed half-swing and gearing; continuous recompute during animation.
+- Logging: appended "servo=%+X (left/right Y) lim=±Z" to gimbal_rel output.
+Open questions / risks:
+- Desired exact log wording for servo info (example given shows "servo=+97 (-120)"); adjust formatting if needed.
+- Verify real FC yaw range and sign; adjust wrap/signs in Kconfig if conventions differ.
+Next actions:
+- Field-test flips at both ends; tune flip_duration/cooldown and beam overlap; finalize log format; optionally expose flip parameters via Kconfig.
