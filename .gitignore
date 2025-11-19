@@ -1,0 +1,40 @@
+# ESP-IDF build artifacts
+/build/
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
+
+# Binaries and objects
+*.o
+*.obj
+*.a
+*.d
+*.elf
+*.bin
+*.map
+*.hex
+
+# IDE/editor
+.vscode/
+.idea/
+*.code-workspace
+.clangd
+.ccls
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
