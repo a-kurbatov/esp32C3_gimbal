@@ -397,6 +397,52 @@ Open questions / risks:
 Next actions:
 * Clean up debug logs, tune loop gains, and document final wiring/strap requirements in README.
 
+Date: 2025-11-19
+Context:
+* Field testing on 15" quad frame exposed noise and occasional IMU stream stalls with BNO085 (SPI). User requested lower sensitivity and ultimately GRV-only control.
+* Large set of changes landed across components to stabilize IMU, simplify control, and improve logging; created and pushed branch `1-axis` to GitHub.
+Decisions:
+* Use GRV (Game Rotation Vector) as the primary/only attitude source (simplest, most stable on this platform).
+* Keep Ki=0 for now; retain small derivative filtering and deadband.
+* Reduce control sensitivity by scaling PID input error by 1/6 (instead of shrinking servo mapping) so full PWM range remains available.
+* Default BNO08x SPI clock to 1 MHz for robustness; 4 MHz proved flaky on this hardware; 2 MHz worked, 1 MHz has ample margin. Add auto-recovery if stream stalls.
+* Add SH-2/SHTP resilience: confirm-and-retry sensor enables, bound report copies, and buffer size increase.
+Changes made:
+* Control path (main/main.c):
+	- Switched to GRV-only stabilization. Compute tilt from quaternion-derived gravity and apply light LPF using existing alpha.
+	- Removed multi-source 10s GYR → 10s ACC → GRV switching; retained concise logs (src=GRV).
+	- Reduced sensitivity by scaling PID input error by 1/6 (servo mapping restored to full range).
+	- Added earlier (now removed) A/B phase tooling and GYR Y-axis swap/inversion; ultimately removed when adopting GRV-only.
+* IMU sample/decoding:
+	- Added quaternion fields (qw,qx,qy,qz) to imu_sample_t (components/imu/include/imu/imu_types.h).
+	- Implemented SH2_GAME_ROTATION_VECTOR decode (Q14) in components/sh2/sh2_SensorValue.{h,c}.
+	- Appended GRV to periodic logs; earlier also used for fallback tilt when raw streams were zero.
+* SH-2/SHTP robustness (components/sh2):
+	- Increased SH2_MAX_SENSOR_EVENT_LEN from 16 to 64 (include/sh2.h) and bounded memcpy to prevent overflow (sh2.c). Fixed a crash that froze servo earlier.
+* BNO08x driver (components/imu_bno08x/imu_bno08x.c):
+	- Confirm-and-retry feature enable for GYR/ACC/GRV at 200 Hz; verify via sh2_getSensorConfig; accept that ACC reports 4000 µs on this firmware (still logs as failed-to-match target).
+	- Added per-stream counters (acc/gyr/grv); added debug log at ~0.1 Hz: INT level and age of last IMU event.
+	- Added explicit device reset and wait-for-ready at bring-up; added auto-recovery: if no IMU events for >2 s, reset and re-enable features.
+	- Slightly increased service loop yields to avoid WDT on heavy traffic.
+* SPI clock configurability:
+	- Added CONFIG_GIMBAL_BNO08X_SPI_HZ to Kconfig (default 1 MHz) and fallback in gimbal_config.h; wired through to SPI device config.
+	- sdkconfig.defaults now sets BNO08x SPI to 1,000,000 Hz.
+* Repo hygiene & branch:
+	- Expanded .gitignore for ESP-IDF/CMake/artifacts/IDE files.
+	- Initialized Git, created branch `1-axis`, committed changes (“GRV-only control, BNO08x robust init/recovery, set SPI 1MHz, add .gitignore”), and pushed to origin.
+Open questions / risks:
+* ACC feature readback reports 4000 µs (250 Hz) instead of requested 5000 µs (200 Hz). The driver currently treats this as a mismatch; consider tolerating <= target interval as success.
+* Rare IMU stalls may still occur (power/EMI, INT integrity). Auto-recovery resets the sensor after >2 s without events; may want a shorter threshold or a configurable one.
+* Axis/orientation: GRV tilt mapping assumes current body-frame mapping; if servo direction feels inverted for some mounts, we may need a sign flip option in config.
+* D-term and alpha: With GRV providing fused attitude, derivative and LPF parameters might be retuned for best feel; PID gains remain conservative.
+* WDT risk remains if future logging increases or SPI ISR bursts grow; current yields proved adequate in tests.
+Next actions:
+* Treat ACC 4000 µs as acceptable (or within tolerance band) to avoid misleading “failed” logs.
+* Add a Kconfig for sensitivity factor (default 6.0) to avoid code edits during field tuning.
+* Document wiring/straps (SPI mode 3, WAKE/RST/INT), defaults, and recovery behavior in README.
+* Optionally attempt dynamic SPI bump: start at 1 MHz, increase to 2 MHz after streaming is stable; fall back on stall.
+* Add a small sign/config block so servo direction can be flipped without code changes if needed.
+
 Date: 2025-11-10
 Context:
 * With IMU streaming, the control felt too soft; servo response to large tilt changes was sluggish.
